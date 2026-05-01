@@ -177,9 +177,6 @@ app.get('/setup/strava-webhook', async (req, res) => {
   if (req.query.token !== process.env.COMPOSIO_WEBHOOK_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (!process.env.STRAVA_CLIENT_SECRET) {
-    return res.status(500).json({ error: 'STRAVA_CLIENT_SECRET not set' });
-  }
   const callbackUrl = `https://sisu-coach-production-1fe4.up.railway.app/webhook/strava/${process.env.COMPOSIO_WEBHOOK_SECRET}`;
   const r = await fetch('https://www.strava.com/api/v3/push_subscriptions', {
     method: 'POST',
