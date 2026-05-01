@@ -196,35 +196,40 @@ app.get('/setup/strava-webhook', async (req, res) => {
 // Strava helpers
 // ---------------------------------------------------------------------------
 
+async function composioExecute(action, input) {
+  const r = await fetch(`https://backend.composio.dev/api/v2/actions/${action}/execute`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.COMPOSIO_API_KEY,
+    },
+    body: JSON.stringify({ connectedAccountId: 'strava_melano-rusher', input }),
+  });
+  if (!r.ok) throw new Error(`Composio HTTP ${r.status}`);
+  const json = await r.json();
+  // v2 wraps result in json.data, which may contain the array or a nested object
+  return json?.data ?? json;
+}
+
 async function syncStravaActivities() {
   try {
-    const composio = await getComposio();
     const since = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
+    let activities = await composioExecute('STRAVA_LIST_ATHLETE_ACTIVITIES', { after: since, per_page: 30 });
 
-    const result = await composio.tools.execute('STRAVA_LIST_ATHLETE_ACTIVITIES', {
-      connectedAccountId: 'strava_melano-rusher',
-      arguments: { after: since, per_page: 30 },
-      dangerouslySkipVersionCheck: true,
-    });
-
-    if (!result?.successful) {
-      console.warn('[strava] sync not successful:', result?.error);
-      return;
-    }
-
-    // data may be array, JSON string, or wrapped object
-    let activities = result.data;
     if (typeof activities === 'string') {
       try { activities = JSON.parse(activities); } catch { activities = []; }
     }
-    if (!Array.isArray(activities)) activities = activities?.data ?? activities?.activities ?? [];
-    if (!Array.isArray(activities)) return;
+    if (!Array.isArray(activities)) activities = activities?.details ?? activities?.data ?? activities?.activities ?? [];
+    if (!Array.isArray(activities)) {
+      console.warn('[strava] unexpected sync response format');
+      return;
+    }
 
     const upserts = activities.map((a) =>
       supabase.from('activities').upsert(
         {
           strava_id: a.id,
-          type: a.type ?? a.sport_type ?? 'Unknown',
+          type: a.sport_type ?? a.type ?? 'Unknown',
           distance_m: a.distance ?? 0,
           moving_time_s: a.moving_time ?? 0,
           started_at: a.start_date ?? a.start_date_local ?? new Date().toISOString(),
@@ -243,17 +248,8 @@ async function syncStravaActivities() {
 
 async function fetchStravaActivity(activityId) {
   try {
-    const composio = await getComposio();
-    const result = await composio.tools.execute('STRAVA_GET_ACTIVITY', {
-      connectedAccountId: 'strava_melano-rusher',
-      arguments: { id: String(activityId) },
-      dangerouslySkipVersionCheck: true,
-    });
-    if (!result?.successful) {
-      console.error('[strava] fetchActivity failed:', result?.error);
-      return null;
-    }
-    return typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+    const result = await composioExecute('STRAVA_GET_ACTIVITY', { id: String(activityId) });
+    return typeof result === 'string' ? JSON.parse(result) : result;
   } catch (err) {
     console.error('[strava] fetchActivity error:', err.message);
     return null;
@@ -289,7 +285,7 @@ async function getCoachingResponse(userText) {
     messages: [
       {
         role: 'user',
-        content: `Последние тренировки (14 дней):\n${summary}\n\nВопрос атлета: ${userText}`,
+        content: `Последние тренировки (30 дней):\n${summary}\n\nВопрос атлета: ${userText}`,
       },
     ],
   });
@@ -298,7 +294,7 @@ async function getCoachingResponse(userText) {
 }
 
 function formatActivities(activities) {
-  if (!activities.length) return 'Нет тренировок за последние 14 дней.';
+  if (!activities.length) return 'Нет тренировок за последние 30 дней.';
 
   return activities
     .map((a) => {
@@ -313,11 +309,13 @@ function formatActivities(activities) {
       const pace = paceDecimal
         ? `${Math.floor(paceDecimal)}:${String(Math.round((paceDecimal % 1) * 60)).padStart(2, '0')} мин/км`
         : '—';
-      const elev =
-        a.raw?.total_elevation_gain != null
-          ? ` | ${Math.round(a.raw.total_elevation_gain)}м D+`
-          : '';
-      return `${date} | ${a.type} | ${distKm} км | ${timeMin} мин | ${pace}${elev}`;
+      const elev = a.raw?.total_elevation_gain
+        ? ` | ${Math.round(a.raw.total_elevation_gain)}м D+`
+        : '';
+      const hr = a.raw?.average_heartrate
+        ? ` | HR ${Math.round(a.raw.average_heartrate)}avg/${Math.round(a.raw.max_heartrate)}max`
+        : '';
+      return `${date} | ${a.type} | ${distKm} км | ${timeMin} мин | ${pace}${elev}${hr}`;
     })
     .join('\n');
 }
