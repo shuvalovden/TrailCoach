@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+      "PowerShell($bytes = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Fill\\($bytes\\); [System.BitConverter]::ToString\\($bytes\\).Replace\\('-',''\\).ToLower\\(\\))",
+      "PowerShell($rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new\\(\\); $bytes = New-Object byte[] 32; $rng.GetBytes\\($bytes\\); \\($bytes | ForEach-Object { $_.ToString\\(\"x2\"\\) }\\) -join '')",
+      "PowerShell($rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new\\(\\); $b = New-Object byte[] 16; $rng.GetBytes\\($b\\); \\($b | ForEach-Object { $_.ToString\\(\"x2\"\\) }\\) -join '')",
+      "mcp__supabase__apply_migration",
+      "PowerShell(railway *)",
+      "PowerShell(npm *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(winget *)",
+      "PowerShell(Set-ExecutionPolicy *)",
+      "PowerShell(npm install *)",
+      "PowerShell(railway whoami *)",
+      "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+      "PowerShell(Invoke-RestMethod -Uri \"https://sisu-coach-production-1fe4.up.railway.app/health\")",
+      "Bash(grep *)",
+      "Bash(RAILWAY_TOKEN=421a471a-d9ba-4afc-969a-02f736a95949 railway up --service sisu-coach --detach)",
+      "PowerShell(railway up *)",
+      "PowerShell($env:Path -split \";\")",
+      "PowerShell(cd \"C:\\\\Users\\\\shuva\\\\Documents\\\\ClaudeProjects\"; $env:RAILWAY_TOKEN = \"421a471a-d9ba-4afc-969a-02f736a95949\"; & \"C:\\\\Users\\\\shuva\\\\AppData\\\\Roaming\\\\npm\\\\railway.cmd\" up --service sisu-coach --detach 2>&1)",
+      "PowerShell($env:PATH = \"C:\\\\Program Files\\\\nodejs\\\\;\" + $env:PATH; cd \"C:\\\\Users\\\\shuva\\\\Documents\\\\ClaudeProjects\"; $env:RAILWAY_TOKEN = \"421a471a-d9ba-4afc-969a-02f736a95949\"; & \"C:\\\\Users\\\\shuva\\\\AppData\\\\Roaming\\\\npm\\\\railway.cmd\" up --service sisu-coach --detach 2>&1)",
+      "Bash(curl -sf https://sisu-coach-production-1fe4.up.railway.app/health)",
+      "mcp__composio__COMPOSIO_REMOTE_WORKBENCH",
+      "mcp__supabase__execute_sql"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
+}
