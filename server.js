@@ -172,6 +172,26 @@ app.post('/webhook/telegram', async (req, res) => {
 // GET /health
 app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
+// GET /setup/strava-webhook — one-time registration of Strava push subscription
+app.get('/setup/strava-webhook', async (req, res) => {
+  if (req.query.token !== process.env.COMPOSIO_WEBHOOK_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const callbackUrl = `https://sisu-coach-production-1fe4.up.railway.app/webhook/strava/${process.env.COMPOSIO_WEBHOOK_SECRET}`;
+  const r = await fetch('https://www.strava.com/api/v3/push_subscriptions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: '233959',
+      client_secret: process.env.STRAVA_CLIENT_SECRET,
+      callback_url: callbackUrl,
+      verify_token: process.env.COMPOSIO_WEBHOOK_SECRET,
+    }),
+  });
+  const data = await r.json();
+  return res.status(r.status).json({ strava_status: r.status, data });
+});
+
 // ---------------------------------------------------------------------------
 // Strava helpers
 // ---------------------------------------------------------------------------
