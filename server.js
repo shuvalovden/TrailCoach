@@ -170,7 +170,7 @@ app.post('/webhook/telegram', async (req, res) => {
 });
 
 // GET /health
-app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString(), v: '76e1a38' }));
 
 // GET /setup/strava-webhook — one-time registration of Strava push subscription
 app.get('/setup/strava-webhook', async (req, res) => {
