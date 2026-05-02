@@ -17,15 +17,7 @@ const supabase = createClient(
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Lazy-load ESM @composio/core via dynamic import (CJS compat)
-let _composio;
-async function getComposio() {
-  if (!_composio) {
-    const { Composio } = await import('@composio/core');
-    _composio = new Composio({ apiKey: process.env.COMPOSIO_API_KEY });
-  }
-  return _composio;
-}
+const STRAVA_CLIENT_ID = '233959';
 
 // --- System prompt ---
 const SYSTEM_PROMPT = `Ты персональный тренер по трейловому бегу. Отвечай всегда на русском языке.
@@ -111,11 +103,10 @@ app.post('/webhook/strava/:secret', async (req, res) => {
     let strava_id;
 
     if (body?.object_type === 'activity' && body?.aspect_type === 'create') {
-      // Strava native format — only has object_id; fetch full details via Composio
+      // Strava native format — only has object_id; fetch full details from Strava API
       strava_id = Number(body.object_id);
       activityData = await fetchStravaActivity(strava_id);
     } else {
-      // Composio v3: { type, metadata, data }  |  v2: { triggerData } or { payload }
       activityData = body?.data ?? body?.triggerData ?? body?.payload ?? body;
       strava_id = Number(activityData?.id ?? activityData?.object_id);
     }
@@ -170,7 +161,7 @@ app.post('/webhook/telegram', async (req, res) => {
 });
 
 // GET /health
-app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString(), v: '76e1a38' }));
+app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString(), v: 'direct-strava' }));
 
 // GET /setup/strava-webhook — one-time registration of Strava push subscription
 app.get('/setup/strava-webhook', async (req, res) => {
@@ -182,7 +173,7 @@ app.get('/setup/strava-webhook', async (req, res) => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      client_id: '233959',
+      client_id: STRAVA_CLIENT_ID,
       client_secret: process.env.STRAVA_CLIENT_SECRET,
       callback_url: callbackUrl,
       verify_token: process.env.COMPOSIO_WEBHOOK_SECRET,
@@ -192,38 +183,91 @@ app.get('/setup/strava-webhook', async (req, res) => {
   return res.status(r.status).json({ strava_status: r.status, data });
 });
 
+// GET /setup/strava-oauth — start Strava OAuth2 flow (one-time setup)
+app.get('/setup/strava-oauth', (req, res) => {
+  if (req.query.token !== process.env.COMPOSIO_WEBHOOK_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const redirectUri = 'https://sisu-coach-production-1fe4.up.railway.app/setup/strava-callback';
+  const url = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=activity%3Aread_all&approval_prompt=force`;
+  return res.redirect(url);
+});
+
+// GET /setup/strava-callback — Strava OAuth2 callback; stores tokens
+app.get('/setup/strava-callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.status(400).json({ error: 'No code' });
+  try {
+    const r = await fetch('https://www.strava.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: STRAVA_CLIENT_ID,
+        client_secret: process.env.STRAVA_CLIENT_SECRET,
+        code,
+        grant_type: 'authorization_code',
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(500).json({ error: data });
+    const { error } = await supabase.from('strava_config').upsert({
+      id: 1,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at,
+    });
+    if (error) throw error;
+    return res.json({ ok: true, athlete: data.athlete?.firstname ?? 'unknown' });
+  } catch (err) {
+    console.error('[strava-oauth] callback error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------------------------------------------------------------------------
-// Strava helpers
+// Strava helpers — direct OAuth2, no Composio dependency
 // ---------------------------------------------------------------------------
 
-async function composioExecute(action, input) {
-  const r = await fetch(`https://backend.composio.dev/api/v2/actions/${action}/execute`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.COMPOSIO_API_KEY,
-    },
-    body: JSON.stringify({ connectedAccountId: 'strava_melano-rusher', input }),
-  });
-  if (!r.ok) throw new Error(`Composio HTTP ${r.status}`);
-  const json = await r.json();
-  // v2 wraps result in json.data, which may contain the array or a nested object
-  return json?.data ?? json;
+async function getStravaToken() {
+  const { data, error } = await supabase.from('strava_config').select('*').eq('id', 1).single();
+  if (error || !data) throw new Error('Strava not authorized — visit /setup/strava-oauth');
+
+  // Refresh if token expires within 5 minutes
+  if (Date.now() / 1000 > data.expires_at - 300) {
+    const r = await fetch('https://www.strava.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: STRAVA_CLIENT_ID,
+        client_secret: process.env.STRAVA_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+        refresh_token: data.refresh_token,
+      }),
+    });
+    if (!r.ok) throw new Error(`Strava token refresh failed: ${r.status}`);
+    const refreshed = await r.json();
+    await supabase.from('strava_config').upsert({
+      id: 1,
+      access_token: refreshed.access_token,
+      refresh_token: refreshed.refresh_token,
+      expires_at: refreshed.expires_at,
+    });
+    return refreshed.access_token;
+  }
+
+  return data.access_token;
 }
 
 async function syncStravaActivities() {
   try {
+    const token = await getStravaToken();
     const since = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
-    let activities = await composioExecute('STRAVA_LIST_ATHLETE_ACTIVITIES', { after: since, per_page: 30 });
-
-    if (typeof activities === 'string') {
-      try { activities = JSON.parse(activities); } catch { activities = []; }
-    }
-    if (!Array.isArray(activities)) activities = activities?.details ?? activities?.data ?? activities?.activities ?? [];
-    if (!Array.isArray(activities)) {
-      console.warn('[strava] unexpected sync response format');
-      return;
-    }
+    const r = await fetch(
+      `https://www.strava.com/api/v3/athlete/activities?after=${since}&per_page=30`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!r.ok) throw new Error(`Strava API ${r.status}`);
+    const activities = await r.json();
 
     const upserts = activities.map((a) =>
       supabase.from('activities').upsert(
@@ -248,8 +292,13 @@ async function syncStravaActivities() {
 
 async function fetchStravaActivity(activityId) {
   try {
-    const result = await composioExecute('STRAVA_GET_ACTIVITY', { id: String(activityId) });
-    return typeof result === 'string' ? JSON.parse(result) : result;
+    const token = await getStravaToken();
+    const r = await fetch(
+      `https://www.strava.com/api/v3/activities/${activityId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!r.ok) throw new Error(`Strava API ${r.status}`);
+    return r.json();
   } catch (err) {
     console.error('[strava] fetchActivity error:', err.message);
     return null;
