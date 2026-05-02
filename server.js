@@ -364,7 +364,13 @@ function formatActivities(activities) {
       const hr = a.raw?.average_heartrate
         ? ` | HR ${Math.round(a.raw.average_heartrate)}avg/${Math.round(a.raw.max_heartrate)}max`
         : '';
-      return `${date} | ${a.type} | ${distKm} км | ${timeMin} мин | ${pace}${elev}${hr}`;
+      const cadence = a.raw?.average_cadence
+        ? ` | ${Math.round(a.raw.average_cadence * 2)}spm`
+        : '';
+      const power = a.raw?.average_watts
+        ? ` | ${Math.round(a.raw.average_watts)}W`
+        : '';
+      return `${date} | ${a.type} | ${distKm} км | ${timeMin} мин | ${pace}${elev}${hr}${cadence}${power}`;
     })
     .join('\n');
 }
