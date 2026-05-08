@@ -515,12 +515,20 @@ async function registerTelegramCommands() {
   }
 }
 
+function sanitizeHtml(text) {
+  return text
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<strong>/gi, '<b>').replace(/<\/strong>/gi, '</b>')
+    .replace(/<em>/gi, '<i>').replace(/<\/em>/gi, '</i>')
+    .replace(/<[^>]+>/g, (tag) => /^<\/?(b|i|u|s|code|pre|a)(\s|>)/i.test(tag) ? tag : '');
+}
+
 async function sendTelegramMessage(chatId, text) {
   const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+    body: JSON.stringify({ chat_id: chatId, text: sanitizeHtml(text), parse_mode: 'HTML' }),
   });
   if (!r.ok) {
     const errBody = await r.text();
