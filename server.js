@@ -487,9 +487,9 @@ async function registerTelegramCommands() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       commands: [
-        { command: 'sync30d', description: 'Синхронизировать активности из Strava за 30 дней' },
-        { command: 'feedback', description: 'Структурированный фидбек по тренировкам за 7 дней' },
-        { command: 'plan', description: 'План тренировок на следующую неделю' },
+        { command: 'sync30d', description: 'Обновить данные из Strava' },
+        { command: 'feedback', description: 'Фидбек по тренировкам за неделю' },
+        { command: 'plan', description: 'План тренировок на неделю' },
       ],
     }),
   });
