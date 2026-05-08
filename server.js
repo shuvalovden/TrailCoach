@@ -151,9 +151,25 @@ app.post('/webhook/telegram', async (req, res) => {
     if (!message?.text) return;
 
     const chatId = message.chat.id;
-    const userText = message.text;
+    const userText = message.text.trim();
 
-    const reply = await getCoachingResponse(userText);
+    let reply;
+    if (userText.startsWith('/sync30d')) {
+      await sendTelegramMessage(chatId, 'Синхронизирую активности со Strava...');
+      try {
+        const count = await syncStravaActivities();
+        reply = `Готово — синхронизировано ${count} активностей за последние 30 дней.`;
+      } catch (err) {
+        reply = `Ошибка синхронизации: ${err.message}`;
+      }
+    } else if (userText.startsWith('/feedback')) {
+      reply = await getFeedbackResponse();
+    } else if (userText.startsWith('/plan')) {
+      reply = await getPlanResponse();
+    } else {
+      reply = await getCoachingResponse(userText);
+    }
+
     await sendTelegramMessage(chatId, reply);
   } catch (err) {
     console.error('[telegram] handler error:', err.message);
@@ -285,8 +301,10 @@ async function syncStravaActivities() {
 
     await Promise.all(upserts);
     console.log(`[strava] synced ${activities.length} activities`);
+    return activities.length;
   } catch (err) {
     console.error('[strava] sync error:', err.message);
+    throw err;
   }
 }
 
@@ -310,10 +328,6 @@ async function fetchStravaActivity(activityId) {
 // ---------------------------------------------------------------------------
 
 async function getCoachingResponse(userText) {
-  // Pull fresh data from Strava before responding (fire-and-forget pattern with await
-  // so Claude sees the latest activities; tolerate failures gracefully)
-  await syncStravaActivities();
-
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
@@ -375,6 +389,85 @@ function formatActivities(activities) {
     .join('\n');
 }
 
+async function getFeedbackResponse() {
+  const since = new Date();
+  since.setDate(since.getDate() - 7);
+
+  const { data: activities, error } = await supabase
+    .from('activities')
+    .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
+    .gte('started_at', since.toISOString())
+    .order('started_at', { ascending: false });
+
+  if (error) throw error;
+
+  const summary = formatActivities(activities ?? []);
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1500,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: 'user',
+        content: `Тренировки за последние 7 дней:\n${summary}\n\nДай структурированный недельный фидбек по следующим разделам:\n1. Итоги недели (объём, D+, типы тренировок)\n2. Что сделано хорошо\n3. На что обратить внимание\n4. Фокус следующей тренировочной недели`,
+      },
+    ],
+  });
+
+  return response.content[0].text;
+}
+
+async function getPlanResponse() {
+  const since = new Date();
+  since.setDate(since.getDate() - 30);
+
+  const { data: activities, error } = await supabase
+    .from('activities')
+    .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
+    .gte('started_at', since.toISOString())
+    .order('started_at', { ascending: false });
+
+  if (error) throw error;
+
+  const summary = formatActivities(activities ?? []);
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2000,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: 'user',
+        content: `Тренировки за последние 30 дней:\n${summary}\n\nСоставь план тренировок на следующую неделю (понедельник–воскресенье) с учётом текущего этапа подготовки. Для каждого дня укажи: тип тренировки, продолжительность/дистанцию, целевые пульсовые зоны и ключевые акценты. Учитывай текущую фазу плана (май 2026 — восстановление после MIUT) и накопленную нагрузку за последние 30 дней.`,
+      },
+    ],
+  });
+
+  return response.content[0].text;
+}
+
+async function registerTelegramCommands() {
+  const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/setMyCommands`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      commands: [
+        { command: 'sync30d', description: 'Синхронизировать активности из Strava за 30 дней' },
+        { command: 'feedback', description: 'Структурированный фидбек по тренировкам за 7 дней' },
+        { command: 'plan', description: 'План тренировок на следующую неделю' },
+      ],
+    }),
+  });
+  if (!r.ok) {
+    const errBody = await r.text();
+    console.error('[telegram] setMyCommands failed:', errBody);
+  } else {
+    console.log('[telegram] commands registered');
+  }
+}
+
 async function sendTelegramMessage(chatId, text) {
   const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
   const r = await fetch(url, {
@@ -392,4 +485,9 @@ async function sendTelegramMessage(chatId, text) {
 // Start
 // ---------------------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Sisu Coach listening on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Sisu Coach listening on port ${PORT}`);
+  registerTelegramCommands().catch((err) =>
+    console.error('[telegram] registerTelegramCommands error:', err.message)
+  );
+});
