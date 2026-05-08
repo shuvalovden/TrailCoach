@@ -90,9 +90,52 @@ graph TD
 
 ## Key notes
 
-- **No Composio**: Strava access is direct OAuth2. Tokens stored in Supabase `strava_config` table (id=1). Auto-refresh if expiry within 5 min.
-- **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959.
+- **No Composio**: Strava access is direct OAuth2. Tokens stored in Supabase `strava_config` table (id=1) and mirrored to `strava_tokens`. Auto-refresh if expiry within 5 min.
+- **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959, telegram_chat_id: 8358078346.
 - **Pull model**: Strava data is fetched on demand via `/sync30d` command. Native webhook at `/webhook/strava/:secret` is optional for real-time ingestion.
-- **Supabase select**: `activities` query extracts flat fields from `raw` JSONB via PostgREST `->>`/`->` operators — no full `raw` object in memory.
+- **Supabase select**: `activities` query reads full `raw` JSONB column; `formatActivities()` accesses fields via `a.raw?.field`.
 - **Brevity**: `SYSTEM_PROMPT` instructs Claude to default to 3–5 sentences; expand only on explicit request.
 - **Deployment**: Railway auto-deploys on push to `main` in GitHub. Node ≥ 20 required.
+
+## Database schema
+
+```sql
+-- Multi-user identity
+CREATE TABLE users (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  telegram_chat_id  bigint UNIQUE NOT NULL,
+  strava_athlete_id bigint UNIQUE,
+  name              text,
+  profile_text      text,   -- athlete-specific sections of SYSTEM_PROMPT
+  created_at        timestamptz DEFAULT now()
+);
+
+-- Strava OAuth2 tokens per user
+CREATE TABLE strava_tokens (
+  user_id       uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  access_token  text NOT NULL,
+  refresh_token text NOT NULL,
+  expires_at    bigint NOT NULL
+);
+
+-- Training activities (one per Strava activity)
+CREATE TABLE activities (
+  id            bigserial PRIMARY KEY,
+  strava_id     bigint UNIQUE NOT NULL,
+  user_id       uuid REFERENCES users(id) ON DELETE CASCADE,
+  type          text,
+  distance_m    float8,
+  moving_time_s int,
+  started_at    timestamptz,
+  raw           jsonb    -- full Strava activity object
+);
+-- Indexes: activities(user_id, started_at DESC)
+
+-- Legacy single-user token store (still used by server.js)
+CREATE TABLE strava_config (
+  id            int PRIMARY KEY,
+  access_token  text,
+  refresh_token text,
+  expires_at    bigint
+);
+```
