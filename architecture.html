@@ -167,24 +167,15 @@ button:hover { filter: brightness(1.2); }
     d="M 768,276 L 622,272" marker-end="url(#a-purple)"/>
   <text class="edge-lbl" x="694" y="287">coaching reply (RU)</text>
 
-  <!-- server.js → Composio (sync call) -->
-  <path id="e-srv-comp" class="edge" stroke="#06b6d4"
-    d="M 507,317 L 492,412" marker-end="url(#a-cyan)"/>
-  <text class="edge-lbl" x="468" y="368">syncStravaActivities()</text>
+  <!-- server.js → Strava (direct sync, /sync30d) -->
+  <path id="e-srv-strava" class="edge" stroke="#f97316"
+    d="M 560,317 C 590,360 622,395 638,415" marker-end="url(#a-orange)"/>
+  <text class="edge-lbl" x="617" y="356">syncStravaActivities() [/sync30d]</text>
 
-  <!-- Composio → server.js (activities return) -->
-  <path id="e-comp-srv" class="edge" stroke="#06b6d4" stroke-dasharray="3,3"
-    d="M 520,412 L 533,317" marker-end="url(#a-cyan)"/>
-
-  <!-- Composio → Strava -->
-  <path id="e-comp-strava" class="edge" stroke="#f97316"
-    d="M 595,442 L 638,442" marker-end="url(#a-orange)"/>
-  <text class="edge-lbl" x="616" y="430">STRAVA_LIST_ATHLETE_ACTIVITIES</text>
-
-  <!-- Strava → Composio (activities JSON) -->
-  <path id="e-strava-comp" class="edge" stroke="#f97316" stroke-dasharray="3,3"
-    d="M 638,458 L 595,458" marker-end="url(#a-orange)"/>
-  <text class="edge-lbl" x="616" y="472">activities JSON</text>
+  <!-- Strava → server.js (activities JSON) -->
+  <path id="e-strava-srv" class="edge" stroke="#f97316" stroke-dasharray="3,3"
+    d="M 638,432 C 608,414 576,372 557,330" marker-end="url(#a-orange)"/>
+  <text class="edge-lbl" x="578" y="395">activities JSON</text>
 
   <!-- server.js → Supabase (upsert) -->
   <path id="e-srv-supa" class="edge" stroke="#22c55e"
@@ -245,7 +236,7 @@ button:hover { filter: brightness(1.2); }
     <text x="455" y="238" font-size="20" text-anchor="middle" dominant-baseline="middle">⚡</text>
     <text x="540" y="234" font-size="15" font-weight="800" fill="#fff" text-anchor="middle" dominant-baseline="middle">server.js</text>
     <text class="node-sub" x="520" y="254">Express · CJS · Railway</text>
-    <text class="node-sub" x="520" y="270">4 routes · 5 functions</text>
+    <text class="node-sub" x="520" y="270">7 routes · 8 functions</text>
     <text class="node-badge" x="520" y="287">PORT 3000 · Node 24</text>
     <text class="node-badge" x="520" y="301" font-size="8">sisu-coach-production-1fe4.up.railway.app</text>
   </g>
@@ -256,7 +247,7 @@ button:hover { filter: brightness(1.2); }
     <text x="798" y="265" font-size="18" text-anchor="middle" dominant-baseline="middle">🔮</text>
     <text class="node-title" x="862" y="261">Claude API</text>
     <text class="node-sub" x="848" y="277">claude-sonnet-4-6</text>
-    <text class="node-sub" x="848" y="291">max_tokens: 1500 · RU</text>
+    <text class="node-sub" x="848" y="291">max_tokens: 500–1000 · RU</text>
   </g>
 
   <!-- Supabase -->
@@ -266,15 +257,6 @@ button:hover { filter: brightness(1.2); }
     <text class="node-title" x="278" y="437">Supabase</text>
     <text class="node-sub" x="255" y="453">Postgres · PostgREST</text>
     <text class="node-sub" x="255" y="467">activities table</text>
-  </g>
-
-  <!-- Composio -->
-  <g class="node" id="n-composio" onclick="showDetail('composio')">
-    <rect x="418" y="412" width="178" height="65" rx="9" fill="url(#g-cyan)" stroke="#06b6d4" stroke-width="1.5"/>
-    <text x="452" y="437" font-size="18" text-anchor="middle" dominant-baseline="middle">🔗</text>
-    <text class="node-title" x="545" y="433">Composio</text>
-    <text class="node-sub" x="520" y="449">@composio/core v0.5.5</text>
-    <text class="node-sub" x="520" y="463">ESM · lazy import()</text>
   </g>
 
   <!-- Strava -->
@@ -298,8 +280,8 @@ button:hover { filter: brightness(1.2); }
     <text x="42" y="64" font-size="9" fill="#6b7280" dominant-baseline="middle">Claude AI call</text>
     <line x1="12" y1="80" x2="35" y2="80" stroke="#22c55e" stroke-width="1.5"/>
     <text x="42" y="80" font-size="9" fill="#6b7280" dominant-baseline="middle">Supabase DB ops</text>
-    <line x1="12" y1="93" x2="35" y2="93" stroke="#06b6d4" stroke-width="1.5"/>
-    <text x="42" y="93" font-size="9" fill="#6b7280" dominant-baseline="middle">Composio / Strava sync</text>
+    <line x1="12" y1="93" x2="35" y2="93" stroke="#f97316" stroke-width="1.5"/>
+    <text x="42" y="93" font-size="9" fill="#6b7280" dominant-baseline="middle">Strava sync (direct OAuth2)</text>
   </g>
 
 </g>
@@ -357,84 +339,103 @@ async function sendTelegramMessage(chatId, text) {
   server: {
     title: '⚡ server.js — Express Hub (Railway)',
     color: '#f59e0b',
-    desc: 'Главный оркестратор. CommonJS-модуль на Node.js + Express. Управляет всем пайплайном: принимает Telegram-сообщение → синкает Strava → пишет/читает Supabase → вызывает Claude → отправляет ответ.',
+    desc: 'Главный оркестратор. CommonJS-модуль на Node.js + Express. Роутинг по Telegram-командам (/sync30d, /feedback, /plan, текст), прямая OAuth2-интеграция со Strava, хранение в Supabase, генерация ответов через Claude.',
     code:
-`// Endpoints:
-// POST /webhook/telegram        ← основной поток
-// POST /webhook/strava/:secret  ← native Strava webhook (опционально)
-// GET  /webhook/strava/:secret  ← Strava validation challenge
-// GET  /health                  ← { ok: true, ts: ... }
+`// 7 routes:
+// POST /webhook/telegram         ← /sync30d | /feedback | /plan | текст
+// POST /webhook/strava/:secret   ← native Strava webhook (опционально)
+// GET  /webhook/strava/:secret   ← Strava validation challenge
+// GET  /health
+// GET  /setup/strava-oauth       ← старт OAuth2 flow (one-time)
+// GET  /setup/strava-callback    ← OAuth2 callback, сохраняет токены
+// GET  /setup/strava-webhook     ← регистрация Strava push subscription
 
-// Ключевые функции:
-// getComposio()            — lazy ESM import + singleton
-// syncStravaActivities()   — Composio → upsert Supabase
-// fetchStravaActivity(id)  — одна активность по ID
-// getCoachingResponse(txt) — полный pipeline ответа
-// formatActivities(arr)    — форматирование для Claude
-// sendTelegramMessage()    — отправка через Telegram API`
+// 8 функций:
+// getStravaToken()           — читает/обновляет OAuth2 токен из strava_config
+// syncStravaActivities()     — GET /athlete/activities → upsert Supabase
+// fetchStravaActivity(id)    — одна активность по ID (webhook flow)
+// getCoachingResponse(txt)   — 30 дней, max_tokens: 500
+// getFeedbackResponse()      — 7 дней, структурированный фидбек, max_tokens: 800
+// getPlanResponse()          — 30 дней, план на неделю, max_tokens: 1000
+// formatActivities(arr)      — D+/D-, HR, cadence, watts, кДж, [ИНТЕРВАЛЫ], лапы
+// registerTelegramCommands() — setMyCommands при старте сервера`
   },
   claude: {
     title: '🔮 Claude API (Anthropic)',
     color: '#8b5cf6',
-    desc: 'Языковая модель claude-sonnet-4-6. Получает системный промпт с полным профилем атлета, историю тренировок за 30 дней (текстовый summary) и вопрос. Отвечает на русском языке, max 1500 токенов.',
+    desc: 'Языковая модель claude-sonnet-4-6. Получает системный промпт с профилем атлета и правилом краткости, текстовый summary тренировок и запрос. Отвечает на русском, 3–5 предложений по умолчанию.',
     code:
-`const response = await anthropic.messages.create({
+`// max_tokens по команде:
+// getCoachingResponse  → 500   (текстовые вопросы)
+// getFeedbackResponse  → 800   (/feedback, 7 дней)
+// getPlanResponse      → 1000  (/plan, 30 дней)
+
+const response = await anthropic.messages.create({
   model: 'claude-sonnet-4-6',
-  max_tokens: 1500,
-  system: SYSTEM_PROMPT,   // ~2 KB: профиль + зоны + план + принципы
+  max_tokens: 500,
+  system: SYSTEM_PROMPT,  // профиль + правило краткости + зоны + план
   messages: [{
     role: 'user',
     content: \`Последние тренировки (30 дней):\\n\${summary}\\n\\nВопрос: \${userText}\`
   }]
 });
-// summary формат: "DD.MM | TrailRun | 14.5 км | 105 мин | 7:14 мин/км | 552м D+"
 
-// Системный промпт содержит:
-// — профиль атлета (специализация, объём, кросс-тренинг)
-// — пульсовые зоны (Z1–Z5)
-// — сильные стороны и зоны риска
-// — план май–октябрь 2026 (цели и гонки)
-// — ключевые принципы тренировок`
+// summary формат (новые поля):
+// "DD.MM | TrailRun | 14.5 км | 105 мин | 7:14 мин/км
+//  | 552м D+ / 489м D- | HR 148avg/168max | 172spm | 1316 кДж
+//  | Лапы: 6×[4:05 мин/км | HR 162]"`
   },
   composio: {
-    title: '🔗 Composio (@composio/core)',
-    color: '#06b6d4',
-    desc: 'Абстракция над Strava OAuth. Хранит токены и управляет авторизацией без токенов в коде. Пакет ESM-only, поэтому загружается через dynamic import() для совместимости с CJS-сервером.',
+    title: '🏃 Strava OAuth2 — прямая интеграция',
+    color: '#f97316',
+    desc: 'Strava используется напрямую через OAuth2 REST API без Composio. Токены хранятся в Supabase (таблица strava_config, id=1). При каждом запросе проверяется expiry — если до истечения < 5 минут, токен обновляется автоматически.',
     code:
-`// Lazy-load ESM из CJS (singleton):
-let _composio;
-async function getComposio() {
-  if (!_composio) {
-    const { Composio } = await import('@composio/core');
-    _composio = new Composio({ apiKey: process.env.COMPOSIO_API_KEY });
+`// Хранение токенов в Supabase:
+// strava_config: { id, access_token, refresh_token, expires_at }
+
+async function getStravaToken() {
+  const { data } = await supabase
+    .from('strava_config').select('*').eq('id', 1).single();
+
+  if (Date.now() / 1000 > data.expires_at - 300) {
+    // auto-refresh
+    const r = await fetch('https://www.strava.com/oauth/token', {
+      method: 'POST',
+      body: JSON.stringify({ client_id, client_secret,
+        grant_type: 'refresh_token', refresh_token: data.refresh_token }),
+    });
+    const refreshed = await r.json();
+    await supabase.from('strava_config').upsert({ id: 1, ...refreshed });
+    return refreshed.access_token;
   }
-  return _composio;
+  return data.access_token;
 }
 
-// Вызов Strava через Composio:
-const result = await composio.tools.execute(
-  'STRAVA_LIST_ATHLETE_ACTIVITIES',
-  {
-    connectedAccountId: 'strava_melano-rusher',
-    arguments: { after: since30d, per_page: 30 },
-    dangerouslySkipVersionCheck: true,  // fix v0.5.5 slug lookup
-  }
+// Sync 30 дней:
+const r = await fetch(
+  \`https://www.strava.com/api/v3/athlete/activities?after=\${since}&per_page=30\`,
+  { headers: { Authorization: \`Bearer \${token}\` } }
 );`
   },
   strava: {
     title: '🏃 Strava API',
     color: '#f97316',
-    desc: 'Источник данных о тренировках Дениса. Pull-модель: данные запрашиваются при каждом Telegram-сообщении. Опциональный push через native Strava webhook (требует собственного Strava API app).',
+    desc: 'Источник данных о тренировках Дениса (athlete id: 46894875). Pull по команде /sync30d — запрашивает последние 30 дней. Опциональный push через native Strava webhook для real-time ingestion.',
     code:
-`// Pull-режим (основной) — на каждое Telegram-сообщение:
-STRAVA_LIST_ATHLETE_ACTIVITIES
-  after:    unix_timestamp (30 дней назад)
-  per_page: 30
+`// Pull-режим (по команде /sync30d):
+GET /api/v3/athlete/activities?after={unix30dAgo}&per_page=30
+Authorization: Bearer {access_token}
 
-// Push-режим (опциональный) — native Strava webhook:
+// Поля, используемые в formatActivities():
+// distance, moving_time, sport_type, start_date
+// total_elevation_gain, total_elevation_loss, elev_high, elev_low
+// average_heartrate, max_heartrate, average_cadence
+// average_watts, kilojoules, workout_type, laps[]
+
+// Push-режим (опциональный):
 // GET  /webhook/strava/:secret → hub.challenge (subscription validation)
 // POST /webhook/strava/:secret → { object_type:'activity', object_id }
-//   → вызывает fetchStravaActivity(id) → upsert Supabase
+//   → fetchStravaActivity(id) → upsert Supabase
 
 // Callback URL:
 // https://sisu-coach-production-1fe4.up.railway.app
@@ -508,17 +509,16 @@ node_modules/
 
 // ── Flow animation steps ──────────────────────────────────────────────
 const steps = [
-  { edges: ['e-usr-tg'],        dot: '#3b82f6', path: 'M170,265 L210,265',        text: '① Пользователь пишет вопрос в Telegram-бота' },
-  { edges: ['e-tg-srv'],        dot: '#3b82f6', path: 'M348,262 C388,252 408,246 418,244', text: '② Telegram доставляет POST /webhook/telegram · сервер отвечает 200 немедленно' },
-  { edges: ['e-srv-comp'],      dot: '#06b6d4', path: 'M507,317 L492,412',        text: '③ syncStravaActivities() — вызов Composio SDK (lazy ESM import)' },
-  { edges: ['e-comp-strava'],   dot: '#f97316', path: 'M595,442 L638,442',        text: '④ Composio вызывает STRAVA_LIST_ATHLETE_ACTIVITIES · последние 30 дней' },
-  { edges: ['e-strava-comp','e-comp-srv'], dot: '#f97316', path: 'M638,458 L595,458 L520,412 L533,317', text: '⑤ Strava возвращает до 30 активностей → Composio → сервер' },
-  { edges: ['e-srv-supa'],      dot: '#22c55e', path: 'M456,313 C430,365 340,385 305,415', text: '⑥ Upsert активностей в Supabase (ON CONFLICT strava_id DO UPDATE)' },
-  { edges: ['e-supa-srv'],      dot: '#22c55e', path: 'M320,415 C365,384 455,368 471,315', text: '⑦ SELECT за 30 дней → formatActivities() → текстовый summary для Claude' },
-  { edges: ['e-srv-claude'],    dot: '#8b5cf6', path: 'M622,255 L768,262',        text: '⑧ Вызов Claude: system_prompt (профиль + зоны + план) + summary + вопрос пользователя' },
-  { edges: ['e-claude-srv'],    dot: '#8b5cf6', path: 'M768,276 L622,272',        text: '⑨ Claude возвращает персонализированный тренерский совет на русском языке' },
-  { edges: ['e-srv-tg'],        dot: '#3b82f6', path: 'M418,278 C400,284 378,286 348,284', text: '⑩ sendTelegramMessage() — native fetch к Telegram Bot API' },
-  { edges: ['e-tg-usr'],        dot: '#3b82f6', path: 'M210,280 L170,280',        text: '⑪ Пользователь получает тренерский ответ 🏔️' },
+  { edges: ['e-usr-tg'],        dot: '#3b82f6', path: 'M170,265 L210,265',                  text: '① Пользователь отправляет /sync30d, /feedback, /plan или текстовый вопрос' },
+  { edges: ['e-tg-srv'],        dot: '#3b82f6', path: 'M348,262 C388,252 408,246 418,244',  text: '② Telegram доставляет POST /webhook/telegram · сервер отвечает 200 немедленно · роутинг по команде' },
+  { edges: ['e-srv-strava'],    dot: '#f97316', path: 'M560,317 C590,360 622,395 638,415',  text: '③ /sync30d: syncStravaActivities() → GET /athlete/activities (прямой Strava OAuth2, last 30d)' },
+  { edges: ['e-strava-srv'],    dot: '#f97316', path: 'M638,432 C608,414 576,372 557,330',  text: '④ Strava возвращает до 30 активностей (JSON с laps, HR, D+/D-, кДж) → сервер' },
+  { edges: ['e-srv-supa'],      dot: '#22c55e', path: 'M456,313 C430,365 340,385 305,415',  text: '⑤ Upsert активностей в Supabase (ON CONFLICT strava_id DO UPDATE)' },
+  { edges: ['e-supa-srv'],      dot: '#22c55e', path: 'M320,415 C365,384 455,368 471,315',  text: '⑥ SELECT 7d или 30d · PostgREST ->> извлекает плоские поля из raw JSONB · formatActivities()' },
+  { edges: ['e-srv-claude'],    dot: '#8b5cf6', path: 'M622,255 L768,262',                  text: '⑦ Claude: SYSTEM_PROMPT (профиль + правило краткости) + summary + запрос · max_tokens 500–1000' },
+  { edges: ['e-claude-srv'],    dot: '#8b5cf6', path: 'M768,276 L622,272',                  text: '⑧ Claude возвращает ответ на русском (3–5 предложений по умолчанию)' },
+  { edges: ['e-srv-tg'],        dot: '#3b82f6', path: 'M418,278 C400,284 378,286 348,284',  text: '⑨ sendTelegramMessage() — native fetch к Telegram Bot API' },
+  { edges: ['e-tg-usr'],        dot: '#3b82f6', path: 'M210,280 L170,280',                  text: '⑩ Пользователь получает тренерский ответ 🏔️' },
 ];
 
 let animTimer = null;
