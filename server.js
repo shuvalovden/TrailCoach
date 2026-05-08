@@ -73,7 +73,8 @@ const SYSTEM_PROMPT = `Ты персональный тренер по трей�
 2. Наличие работы на спусках
 3. Регулярность силовых
 4. Накопленный D+ за неделю (не только км)
-5. Признаки недовосстановления`;
+5. Признаки недовосстановления
+6. Типы активностей в данных: Run/TrailRun — бег, WeightTraining — силовая, Workout — общая тренировка (может быть что угодно: кросс-тренинг, ОФП, мобилити — но НЕ обязательно силовая). Не путать Workout и WeightTraining.`;
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -335,7 +336,7 @@ async function getCoachingResponse(userText) {
 
   const { data: activities, error } = await supabase
     .from('activities')
-    .select("strava_id, type, distance_m, moving_time_s, started_at, raw->>'total_elevation_gain', raw->>'average_heartrate', raw->>'max_heartrate', raw->>'average_cadence', raw->>'average_watts', raw->>'total_elevation_loss', raw->>'elev_high', raw->>'elev_low', raw->>'kilojoules', raw->>'workout_type', raw->'laps'")
+    .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
@@ -375,10 +376,12 @@ function formatActivities(activities) {
         ? `${Math.floor(paceDecimal)}:${String(Math.round((paceDecimal % 1) * 60)).padStart(2, '0')} мин/км`
         : '—';
 
-      const elevGain = a.total_elevation_gain ? Number(a.total_elevation_gain) : 0;
-      const rawElevLoss = a.total_elevation_loss ? Number(a.total_elevation_loss) : null;
+      const elevGain = a.raw?.total_elevation_gain ? Number(a.raw.total_elevation_gain) : 0;
+      const rawElevLoss = a.raw?.total_elevation_loss ? Number(a.raw.total_elevation_loss) : null;
       const estimatedElevLoss =
-        a.elev_high && a.elev_low ? Number(a.elev_high) - Number(a.elev_low) : null;
+        a.raw?.elev_high && a.raw?.elev_low
+          ? Number(a.raw.elev_high) - Number(a.raw.elev_low)
+          : null;
       const elevLoss =
         rawElevLoss && rawElevLoss > 0
           ? rawElevLoss
@@ -390,19 +393,27 @@ function formatActivities(activities) {
         : '';
       const elev = elevGain > 0 ? ` | ${Math.round(elevGain)}м D+${elevLossStr}` : '';
 
-      const hr = a.average_heartrate
-        ? ` | HR ${Math.round(Number(a.average_heartrate))}avg/${Math.round(Number(a.max_heartrate))}max`
+      const hr = a.raw?.average_heartrate
+        ? ` | HR ${Math.round(a.raw.average_heartrate)}avg/${Math.round(a.raw.max_heartrate)}max`
         : '';
-      const cadence = a.average_cadence
-        ? ` | ${Math.round(Number(a.average_cadence) * 2)}spm`
+      const cadence = a.raw?.average_cadence
+        ? ` | ${Math.round(a.raw.average_cadence * 2)}spm`
         : '';
-      const power = a.average_watts ? ` | ${Math.round(Number(a.average_watts))}W` : '';
-      const kj = a.kilojoules ? ` | ${Math.round(Number(a.kilojoules))} кДж` : '';
-      const intervalTag = Number(a.workout_type) === 3 ? ' [ИНТЕРВАЛЫ]' : '';
+      const power = a.raw?.average_watts ? ` | ${Math.round(a.raw.average_watts)}W` : '';
+      const kj = a.raw?.kilojoules ? ` | ${Math.round(a.raw.kilojoules)} кДж` : '';
+
+      const sportType = a.type ?? '';
+      let activityTag = '';
+      if ((sportType === 'Run' || sportType === 'TrailRun') && Number(a.raw?.workout_type) === 3) {
+        activityTag = ' [ИНТЕРВАЛЫ]';
+      } else if (sportType === 'WeightTraining') {
+        activityTag = ' [СИЛОВАЯ]';
+      }
 
       let lapsStr = '';
-      if (Array.isArray(a.laps) && a.laps.length > 1) {
-        const valid = a.laps.filter((l) => l.distance > 0 && l.moving_time > 0);
+      const laps = a.raw?.laps;
+      if (Array.isArray(laps) && laps.length > 1) {
+        const valid = laps.filter((l) => l.distance > 0 && l.moving_time > 0);
         if (valid.length > 1) {
           const avgPace =
             valid.reduce((s, l) => s + l.moving_time / 60 / (l.distance / 1000), 0) /
@@ -417,7 +428,7 @@ function formatActivities(activities) {
         }
       }
 
-      return `${date} | ${a.type}${intervalTag} | ${distKm} км | ${timeMin} мин | ${pace}${elev}${hr}${cadence}${power}${kj}${lapsStr}`;
+      return `${date} | ${sportType}${activityTag} | ${distKm} км | ${timeMin} мин | ${pace}${elev}${hr}${cadence}${power}${kj}${lapsStr}`;
     })
     .join('\n');
 }
@@ -428,7 +439,7 @@ async function getFeedbackResponse() {
 
   const { data: activities, error } = await supabase
     .from('activities')
-    .select("strava_id, type, distance_m, moving_time_s, started_at, raw->>'total_elevation_gain', raw->>'average_heartrate', raw->>'max_heartrate', raw->>'average_cadence', raw->>'average_watts', raw->>'total_elevation_loss', raw->>'elev_high', raw->>'elev_low', raw->>'kilojoules', raw->>'workout_type', raw->'laps'")
+    .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
@@ -443,7 +454,7 @@ async function getFeedbackResponse() {
     messages: [
       {
         role: 'user',
-        content: `Тренировки за последние 7 дней:\n${summary}\n\nДай структурированный недельный фидбек. Без лишних вводных фраз и повторов — коротко в каждой секции.\n1. Итоги недели (объём, D+, типы тренировок)\n2. Что сделано хорошо\n3. На что обратить внимание\n4. Фокус следующей тренировочной недели`,
+        content: `Тренировки за последние 7 дней:\n${summary}\n\nДай структурированный недельный фидбек. Без лишних вводных фраз и повторов — коротко в каждой секции.\n1. Итоги недели (объём, D+, типы тренировок)\n2. Что сделано хорошо\n3. На что обратить внимание`,
       },
     ],
   });
@@ -457,13 +468,26 @@ async function getPlanResponse() {
 
   const { data: activities, error } = await supabase
     .from('activities')
-    .select("strava_id, type, distance_m, moving_time_s, started_at, raw->>'total_elevation_gain', raw->>'average_heartrate', raw->>'max_heartrate', raw->>'average_cadence', raw->>'average_watts', raw->>'total_elevation_loss', raw->>'elev_high', raw->>'elev_low', raw->>'kilojoules', raw->>'workout_type', raw->'laps'")
+    .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
   if (error) throw error;
 
   const summary = formatActivities(activities ?? []);
+
+  const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+  const DAY_ABBR = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  const today = new Date();
+  const dow = today.getDay();
+  const daysUntilMon = ((8 - dow) % 7) || 7;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + daysUntilMon);
+  const weekDatesStr = DAY_ABBR.map((abbr, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return `${abbr} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  }).join(', ');
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
@@ -472,7 +496,7 @@ async function getPlanResponse() {
     messages: [
       {
         role: 'user',
-        content: `Тренировки за последние 30 дней:\n${summary}\n\nСоставь план на следующую неделю (пн–вс). Для каждого дня: тип, длительность/дистанция, пульсовые зоны, ключевой акцент. Без вводных фраз. Учитывай фазу (май 2026 — восстановление после MIUT) и нагрузку за 30 дней.`,
+        content: `Тренировки за последние 30 дней:\n${summary}\n\nДаты следующей недели: ${weekDatesStr}\n\nСоставь план на эту неделю. Для каждого дня используй заголовок формата **День недели, DD месяц** — затем тип, длительность/дистанция, пульсовые зоны, ключевой акцент. Без вводных фраз. Учитывай фазу (май 2026 — восстановление после MIUT) и нагрузку за 30 дней.`,
       },
     ],
   });
