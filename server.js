@@ -520,7 +520,9 @@ function sanitizeHtml(text) {
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<strong>/gi, '<b>').replace(/<\/strong>/gi, '</b>')
     .replace(/<em>/gi, '<i>').replace(/<\/em>/gi, '</i>')
-    .replace(/<[^>]+>/g, (tag) => /^<\/?(b|i|u|s|code|pre|a)(\s|>)/i.test(tag) ? tag : '');
+    .replace(/<[^>]+>/g, (tag) => /^<\/?(b|i|u|s|code|pre|a)(\s|>)/i.test(tag) ? tag : '')
+    // Escape bare < that are not the start of a valid Telegram HTML tag (e.g. "HR < 145")
+    .replace(/</g, (m, offset, str) => /^<\/?(b|i|u|s|code|pre|a)[\s>]/i.test(str.slice(offset)) ? m : '&lt;');
 }
 
 async function sendTelegramMessage(chatId, text) {
