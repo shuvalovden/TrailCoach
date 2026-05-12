@@ -91,7 +91,7 @@ graph TD
 ## Key notes
 
 - **No Composio**: Strava access is direct OAuth2. Tokens stored in `strava_tokens` (per user). Legacy `strava_config` (id=1) kept only as fallback for Strava native webhook context. Auto-refresh if expiry within 5 min.
-- **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959, telegram_chat_id: 8358078346.
+- **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959, telegram_chat_id: 546691918.
 - **Pull model**: Strava data is fetched on demand via `/sync30d` command. Native webhook at `/webhook/strava/:secret` is optional for real-time ingestion.
 - **Supabase select**: `activities` query reads full `raw` JSONB column; `formatActivities()` accesses fields via `a.raw?.field`.
 - **System prompt**: static `FORMATTING_RULES` (in `server.js`) + per-user `users.profile_text` from Supabase. Combined by `getSystemPrompt(chatId)`, cached per chatId in a `Map` (no cross-user cache pollution).
