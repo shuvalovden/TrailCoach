@@ -49,6 +49,19 @@ async function getSystemPrompt(chatId) {
   return prompt;
 }
 
+// --- Rate limiter ---
+const rateLimitMap = new Map();
+
+function checkRateLimit(userId) {
+  const today = new Date().toISOString().slice(0, 10);
+  let entry = rateLimitMap.get(userId) ?? { count: 0, date: today };
+  if (entry.date !== today) entry = { count: 0, date: today };
+  if (entry.count >= 20) return false;
+  entry.count++;
+  rateLimitMap.set(userId, entry);
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -77,11 +90,23 @@ app.post('/webhook/strava/:secret', async (req, res) => {
     const body = req.body;
     let activityData;
     let strava_id;
+    let webhookUserId = null;
 
     if (body?.object_type === 'activity' && body?.aspect_type === 'create') {
-      // Strava native format — only has object_id; fetch full details from Strava API
+      // Strava native format — route to the correct user by owner_id
       strava_id = Number(body.object_id);
-      activityData = await fetchStravaActivity(strava_id);
+      const ownerId = Number(body.owner_id);
+      const { data: webhookUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('strava_athlete_id', ownerId)
+        .single();
+      if (!webhookUser) {
+        console.log(`[strava] webhook: no user for strava_athlete_id=${ownerId}, ignoring`);
+        return res.json({ ok: true });
+      }
+      webhookUserId = webhookUser.id;
+      activityData = await fetchStravaActivity(strava_id, webhookUserId);
     } else {
       activityData = body?.data ?? body?.triggerData ?? body?.payload ?? body;
       strava_id = Number(activityData?.id ?? activityData?.object_id);
@@ -95,6 +120,7 @@ app.post('/webhook/strava/:secret', async (req, res) => {
     const { error } = await supabase.from('activities').upsert(
       {
         strava_id,
+        user_id: webhookUserId,
         type: activityData?.type ?? activityData?.sport_type ?? 'Unknown',
         distance_m: activityData?.distance ?? 0,
         moving_time_s: activityData?.moving_time ?? 0,
@@ -136,7 +162,19 @@ app.post('/webhook/telegram', async (req, res) => {
     }
 
     let reply;
-    if (userText.startsWith('/sync30d')) {
+    if (userText.startsWith('/connect')) {
+      if (user.strava_athlete_id) {
+        reply = '✅ Strava уже подключена. Используй /sync30d для обновления данных.';
+      } else {
+        const redirectUri = 'https://sisu-coach-production-1fe4.up.railway.app/setup/strava-callback';
+        const oauthUrl = `https://www.strava.com/oauth/authorize` +
+          `?client_id=${STRAVA_CLIENT_ID}` +
+          `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+          `&response_type=code&scope=activity%3Aread_all` +
+          `&approval_prompt=force&state=${chatId}`;
+        reply = `Для подключения Strava перейди по ссылке:\n${oauthUrl}\n\nПосле авторизации бот автоматически получит доступ к твоим тренировкам.`;
+      }
+    } else if (userText.startsWith('/sync30d')) {
       if (!user.strava_athlete_id) {
         reply = 'Сначала подключи Strava: /connect';
       } else {
@@ -195,10 +233,12 @@ app.get('/setup/strava-oauth', (req, res) => {
   return res.redirect(url);
 });
 
-// GET /setup/strava-callback — Strava OAuth2 callback; stores tokens
+// GET /setup/strava-callback — Strava OAuth2 callback; stores tokens per user
 app.get('/setup/strava-callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
   if (!code) return res.status(400).json({ error: 'No code' });
+  if (!state) return res.status(400).json({ error: 'No state (chatId missing)' });
+  const chatId = Number(state);
   try {
     const r = await fetch('https://www.strava.com/oauth/token', {
       method: 'POST',
@@ -212,14 +252,30 @@ app.get('/setup/strava-callback', async (req, res) => {
     });
     const data = await r.json();
     if (!r.ok) return res.status(500).json({ error: data });
-    const { error } = await supabase.from('strava_config').upsert({
-      id: 1,
+
+    const user = await findOrCreateUser(chatId);
+
+    const { error: tokenError } = await supabase.from('strava_tokens').upsert({
+      user_id: user.id,
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       expires_at: data.expires_at,
     });
-    if (error) throw error;
-    return res.json({ ok: true, athlete: data.athlete?.firstname ?? 'unknown' });
+    if (tokenError) throw tokenError;
+
+    const { error: userError } = await supabase
+      .from('users')
+      .update({ strava_athlete_id: data.athlete.id })
+      .eq('id', user.id);
+    if (userError) throw userError;
+
+    systemPromptCache.delete(chatId);
+
+    await sendTelegramMessage(chatId,
+      `✅ Strava подключена! Привет, ${data.athlete.firstname}.\nНапиши /sync30d чтобы загрузить тренировки.`
+    );
+
+    return res.send('<h2>✅ Готово! Вернись в Telegram.</h2>');
   } catch (err) {
     console.error('[strava-oauth] callback error:', err.message);
     return res.status(500).json({ error: err.message });
@@ -360,6 +416,7 @@ async function getCoachingResponse(userText, userId, chatId) {
   if (error) throw error;
 
   const summary = formatActivities(activities ?? []);
+  if (!checkRateLimit(userId)) return 'Достигнут дневной лимит (20 запросов). Попробуй завтра.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
@@ -465,6 +522,7 @@ async function getFeedbackResponse(userId, chatId) {
   if (error) throw error;
 
   const summary = formatActivities(activities ?? []);
+  if (!checkRateLimit(userId)) return 'Достигнут дневной лимит (20 запросов). Попробуй завтра.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
@@ -510,6 +568,7 @@ async function getPlanResponse(userId, chatId) {
     return `${abbr} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
   }).join(', ');
 
+  if (!checkRateLimit(userId)) return 'Достигнут дневной лимит (20 запросов). Попробуй завтра.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
@@ -534,6 +593,7 @@ async function registerTelegramCommands() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       commands: [
+        { command: 'connect', description: 'Подключить Strava' },
         { command: 'sync30d', description: 'Обновить данные из Strava' },
         { command: 'feedback', description: 'Фидбек по тренировкам за неделю' },
         { command: 'plan', description: 'План тренировок на неделю' },
