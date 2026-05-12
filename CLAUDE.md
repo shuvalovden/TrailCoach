@@ -41,7 +41,7 @@ graph TD
    - `/plan` → `getPlanResponse()` — Claude training plan for next week
    - anything else → `getCoachingResponse(text)` — reads Supabase, calls Claude
 3. Query Supabase `activities` with flat JSON field extractions (PostgREST `->>`), format as text summary
-4. Call Claude with `SYSTEM_PROMPT` (athlete profile + brevity rule + zones + plan) + summary
+4. Call Claude with system prompt = static `FORMATTING_RULES` (in code) + `users.profile_text` fetched from Supabase (athlete profile, zones, plan) + summary
 5. Send Claude reply back to Telegram via `fetch` (native Node, no telegram npm package)
 
 ## Telegram commands
@@ -94,7 +94,7 @@ graph TD
 - **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959, telegram_chat_id: 8358078346.
 - **Pull model**: Strava data is fetched on demand via `/sync30d` command. Native webhook at `/webhook/strava/:secret` is optional for real-time ingestion.
 - **Supabase select**: `activities` query reads full `raw` JSONB column; `formatActivities()` accesses fields via `a.raw?.field`.
-- **Brevity**: `SYSTEM_PROMPT` instructs Claude to default to 3–5 sentences; expand only on explicit request.
+- **System prompt**: split into static `FORMATTING_RULES` (Telegram HTML rules + coach intro, in `server.js`) and per-user `users.profile_text` (athlete profile, zones, plan — editable in Supabase without redeploy). Combined by `getSystemPrompt(chatId)`, cached in memory per process.
 - **Deployment**: Railway auto-deploys on push to `main` in GitHub. Node ≥ 20 required.
 
 ## Database schema
@@ -106,7 +106,7 @@ CREATE TABLE users (
   telegram_chat_id  bigint UNIQUE NOT NULL,
   strava_athlete_id bigint UNIQUE,
   name              text,
-  profile_text      text,   -- athlete-specific sections of SYSTEM_PROMPT
+  profile_text      text,   -- athlete profile, zones, plan, principles (user-specific part of system prompt)
   created_at        timestamptz DEFAULT now()
 );
 

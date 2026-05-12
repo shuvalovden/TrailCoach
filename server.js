@@ -20,7 +20,9 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const STRAVA_CLIENT_ID = '233959';
 
 // --- System prompt ---
-const SYSTEM_PROMPT = `ПРАВИЛА ФОРМАТИРОВАНИЯ (строго соблюдать):
+// Formatting rules are static (apply to all users). Athlete profile is fetched from
+// Supabase users.profile_text and combined with these rules at runtime.
+const FORMATTING_RULES = `ПРАВИЛА ФОРМАТИРОВАНИЯ (строго соблюдать):
 - Ответ отправляется в Telegram. Поддерживается только HTML.
 - Для выделения использовать <b>текст</b> — и ничего другого.
 - Никаких markdown-символов: не использовать ## ### ** __ --- | (таблицы).
@@ -29,42 +31,22 @@ const SYSTEM_PROMPT = `ПРАВИЛА ФОРМАТИРОВАНИЯ (строго
 - Никаких таблиц — только простые списки или строки текста.
 - Между разделами — одна пустая строка.
 
-Ты персональный тренер по трейловому бегу. Отвечай на русском. По умолчанию кратко: 3–5 предложений или короткий список. Расширяй только если явно просят («подробно», «расскажи больше»). Советы конкретные, на основе данных. Единицы: км, м, мин/км.
+Ты персональный тренер по трейловому бегу. Отвечай на русском. По умолчанию кратко: 3–5 предложений или короткий список. Расширяй только если явно просят («подробно», «расскажи больше»). Советы конкретные, на основе данных. Единицы: км, м, мин/км.`;
 
-ПРОФИЛЬ АТЛЕТА:
-- Трентино, Италия. Специализация: трейл, VK.
-- MIUT 40K: 5:40 (25.04.2026). Объём: 30–40 км/нед, часто меньше.
-- Кросс-тренинг: скитур (зима), велосипед, хайкинг.
+let cachedSystemPrompt = null;
 
-ПУЛЬСОВЫЕ ЗОНЫ:
-- Z1 <131 · Z2 131–145 · Z3 146–164 · Z4 165–175 · Z5 175+
-
-ПРОФИЛЬ ГОТОВНОСТИ:
-Сильное: аэробная база (скитур = hill repeats), контроль пульса, power hiking при HR 162+.
-Риски: квадрицепсы на спусках >1000м D-; IT-тракт правого колена (ролл + боковые); мало силовых; лёгкий бег слишком быстрый (держать HR < 145, ~7:15–7:30 мин/км); длинных выходов >17 км ещё не было.
-
-ПЛАН (май–октябрь 2026):
-- Май: восстановление после MIUT, ролл ежедневно.
-- Июнь: База 1 — объём Z1–Z2, силовая 2×/нед, первые спуски.
-- Июль: База 2 + VK — hill repeats 3–4 мин Z4, подъёмы 40–55 мин Z3.
-- 1 авг: PizTri Vertical (Malonno) — 3.52 км / 1000D+, цель sub-60.
-- Авг: База 3 — акцент на спуски.
-- Сент–окт: трейл-специфика, гонка 25–30 км / 2000D+.
-
-ПРИНЦИПЫ:
-- Лёгкий бег: HR < 145, ~7:15–7:30 мин/км.
-- Питание на каждой длинной — тренировать кишечник.
-- Силовая даёт эффект через 7–10 дней — планировать заранее.
-- 6–8 повторов крутого спуска в неделю = ключ к квадрицепсам.
-
-АНАЛИЗ ТРЕНИРОВОК:
-1. Пульс на лёгких — не слишком ли быстро?
-2. Работа на спусках.
-3. Регулярность силовых.
-4. D+ за неделю (не только км).
-5. Признаки недовосстановления.
-6. Типы: Run/TrailRun — бег, WeightTraining — силовая, Workout — общая (не обязательно силовая). Не путать.`;
-console.log('[prompt] length:', SYSTEM_PROMPT.length);
+async function getSystemPrompt(chatId) {
+  if (cachedSystemPrompt) return cachedSystemPrompt;
+  const { data, error } = await supabase
+    .from('users')
+    .select('profile_text')
+    .eq('telegram_chat_id', chatId)
+    .single();
+  if (error || !data?.profile_text) throw new Error('System prompt not found in Supabase for chat ' + chatId);
+  cachedSystemPrompt = FORMATTING_RULES + '\n\n' + data.profile_text;
+  console.log('[prompt] loaded from Supabase, length:', cachedSystemPrompt.length);
+  return cachedSystemPrompt;
+}
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -156,11 +138,11 @@ app.post('/webhook/telegram', async (req, res) => {
         reply = `Ошибка синхронизации: ${err.message}`;
       }
     } else if (userText.startsWith('/feedback')) {
-      reply = await getFeedbackResponse();
+      reply = await getFeedbackResponse(chatId);
     } else if (userText.startsWith('/plan')) {
-      reply = await getPlanResponse();
+      reply = await getPlanResponse(chatId);
     } else {
-      reply = await getCoachingResponse(userText);
+      reply = await getCoachingResponse(userText, chatId);
     }
 
     await sendTelegramMessage(chatId, reply);
@@ -320,7 +302,7 @@ async function fetchStravaActivity(activityId) {
 // Coaching logic
 // ---------------------------------------------------------------------------
 
-async function getCoachingResponse(userText) {
+async function getCoachingResponse(userText, chatId) {
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
@@ -333,11 +315,12 @@ async function getCoachingResponse(userText) {
   if (error) throw error;
 
   const summary = formatActivities(activities ?? []);
+  const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 500,
-    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
     messages: [
       {
         role: 'user',
@@ -423,7 +406,7 @@ function formatActivities(activities) {
     .join('\n');
 }
 
-async function getFeedbackResponse() {
+async function getFeedbackResponse(chatId) {
   const since = new Date();
   since.setDate(since.getDate() - 7);
 
@@ -436,11 +419,12 @@ async function getFeedbackResponse() {
   if (error) throw error;
 
   const summary = formatActivities(activities ?? []);
+  const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 800,
-    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
     messages: [
       {
         role: 'user',
@@ -452,7 +436,7 @@ async function getFeedbackResponse() {
   return response.content[0].text;
 }
 
-async function getPlanResponse() {
+async function getPlanResponse(chatId) {
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
@@ -479,10 +463,12 @@ async function getPlanResponse() {
     return `${abbr} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
   }).join(', ');
 
+  const systemPrompt = await getSystemPrompt(chatId);
+
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 1000,
-    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
     messages: [
       {
         role: 'user',
