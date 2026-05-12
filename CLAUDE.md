@@ -48,6 +48,8 @@ graph TD
 
 | Command | Handler | Data window | max_tokens |
 |---|---|---|---|
+| `/start` | static reply | — | — |
+| `/connect` | inline handler | — | — |
 | `/sync30d` | `syncStravaActivities()` | — | — |
 | `/feedback` | `getFeedbackResponse()` | 7 days | 800 |
 | `/plan` | `getPlanResponse()` | 30 days | 1000 |
@@ -90,12 +92,14 @@ graph TD
 
 ## Key notes
 
-- **No Composio**: Strava access is direct OAuth2. Tokens stored in `strava_tokens` (per user). Legacy `strava_config` (id=1) kept only as fallback for Strava native webhook context. Auto-refresh if expiry within 5 min.
+- **No Composio**: Strava access is direct OAuth2. Tokens stored in `strava_tokens` (per user) — primary store. `strava_config` (id=1) is legacy and no longer actively used (webhook now routes by `owner_id`). Auto-refresh if expiry within 5 min.
 - **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959, telegram_chat_id: 546691918.
 - **Pull model**: Strava data is fetched on demand via `/sync30d` command. Native webhook at `/webhook/strava/:secret` is optional for real-time ingestion.
 - **Supabase select**: `activities` query reads full `raw` JSONB column; `formatActivities()` accesses fields via `a.raw?.field`.
 - **System prompt**: static `FORMATTING_RULES` (in `server.js`) + per-user `users.profile_text` from Supabase. Combined by `getSystemPrompt(chatId)`, cached per chatId in a `Map` (no cross-user cache pollution).
 - **Multi-user**: `findOrCreateUser(chatId)` resolves user on every Telegram message. `is_active` flag gates access. All activity queries filtered by `user_id`. Strava functions take `userId` (uuid from `users` table).
+- **Rate limiter**: in-memory `Map` per `userId`, 20 AI requests/user/day (resets at midnight UTC). Applied in `getCoachingResponse`, `getFeedbackResponse`, `getPlanResponse`. Not applied to `/sync30d` or `/connect`.
+- **Security**: `users.is_active` flag manually set in Supabase to block a user. Checked on every Telegram message before any processing.
 - **Deployment**: Railway auto-deploys on push to `main` in GitHub. Node ≥ 20 required.
 
 ## Database schema

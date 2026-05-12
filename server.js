@@ -162,7 +162,23 @@ app.post('/webhook/telegram', async (req, res) => {
     }
 
     let reply;
-    if (userText.startsWith('/connect')) {
+    if (userText.startsWith('/start')) {
+      reply = `<b>Привет! Я твой персональный тренер по трейловому бегу 🏔</b>
+
+Анализирую тренировки из Strava и даю конкретные рекомендации по подготовке.
+
+<b>Как начать:</b>
+1. Подключи Strava: /connect
+2. Загрузи тренировки: /sync30d
+3. Готово — задавай вопросы!
+
+<b>Команды:</b>
+- /connect — подключить Strava-аккаунт
+- /sync30d — обновить данные из Strava (последние 30 дней)
+- /feedback — анализ тренировок за последние 7 дней
+- /plan — план тренировок на следующую неделю
+- Любой вопрос — просто напиши текстом`;
+    } else if (userText.startsWith('/connect')) {
       if (user.strava_athlete_id) {
         reply = '✅ Strava уже подключена. Используй /sync30d для обновления данных.';
       } else {
@@ -597,10 +613,11 @@ async function registerTelegramCommands() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       commands: [
-        { command: 'connect', description: 'Подключить Strava' },
-        { command: 'sync30d', description: 'Обновить данные из Strava' },
+        { command: 'start',    description: 'Начало работы и список команд' },
+        { command: 'connect',  description: 'Подключить Strava-аккаунт' },
+        { command: 'sync30d',  description: 'Обновить данные из Strava' },
         { command: 'feedback', description: 'Фидбек по тренировкам за неделю' },
-        { command: 'plan', description: 'План тренировок на неделю' },
+        { command: 'plan',     description: 'План тренировок на неделю' },
       ],
     }),
   });
