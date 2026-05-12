@@ -148,11 +148,11 @@ app.post('/webhook/telegram', async (req, res) => {
   // Respond 200 immediately — Telegram retries on any non-2xx or timeout
   res.json({ ok: true });
 
-  try {
-    const message = req.body?.message;
-    if (!message?.text) return;
+  const message = req.body?.message;
+  if (!message?.text) return;
+  const chatId = message.chat.id;
 
-    const chatId = message.chat.id;
+  try {
     const userText = message.text.trim();
 
     const user = await findOrCreateUser(chatId);
@@ -197,6 +197,10 @@ app.post('/webhook/telegram', async (req, res) => {
     await sendTelegramMessage(chatId, reply);
   } catch (err) {
     console.error('[telegram] handler error:', err.message);
+    const errMsg = err?.status === 529 || err?.message?.includes('overloaded')
+      ? 'Claude API перегружен, попробуй через минуту.'
+      : 'Произошла ошибка. Попробуй ещё раз.';
+    sendTelegramMessage(chatId, errMsg).catch(() => {});
   }
 });
 
