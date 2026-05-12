@@ -90,11 +90,12 @@ graph TD
 
 ## Key notes
 
-- **No Composio**: Strava access is direct OAuth2. Tokens stored in Supabase `strava_config` table (id=1) and mirrored to `strava_tokens`. Auto-refresh if expiry within 5 min.
+- **No Composio**: Strava access is direct OAuth2. Tokens stored in `strava_tokens` (per user). Legacy `strava_config` (id=1) kept only as fallback for Strava native webhook context. Auto-refresh if expiry within 5 min.
 - **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959, telegram_chat_id: 8358078346.
 - **Pull model**: Strava data is fetched on demand via `/sync30d` command. Native webhook at `/webhook/strava/:secret` is optional for real-time ingestion.
 - **Supabase select**: `activities` query reads full `raw` JSONB column; `formatActivities()` accesses fields via `a.raw?.field`.
-- **System prompt**: split into static `FORMATTING_RULES` (Telegram HTML rules + coach intro, in `server.js`) and per-user `users.profile_text` (athlete profile, zones, plan — editable in Supabase without redeploy). Combined by `getSystemPrompt(chatId)`, cached in memory per process.
+- **System prompt**: static `FORMATTING_RULES` (in `server.js`) + per-user `users.profile_text` from Supabase. Combined by `getSystemPrompt(chatId)`, cached per chatId in a `Map` (no cross-user cache pollution).
+- **Multi-user**: `findOrCreateUser(chatId)` resolves user on every Telegram message. `is_active` flag gates access. All activity queries filtered by `user_id`. Strava functions take `userId` (uuid from `users` table).
 - **Deployment**: Railway auto-deploys on push to `main` in GitHub. Node ≥ 20 required.
 
 ## Database schema
@@ -107,6 +108,7 @@ CREATE TABLE users (
   strava_athlete_id bigint UNIQUE,
   name              text,
   profile_text      text,   -- athlete profile, zones, plan, principles (user-specific part of system prompt)
+  is_active         boolean DEFAULT true,
   created_at        timestamptz DEFAULT now()
 );
 

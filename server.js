@@ -33,19 +33,20 @@ const FORMATTING_RULES = `ПРАВИЛА ФОРМАТИРОВАНИЯ (стро�
 
 Ты персональный тренер по трейловому бегу. Отвечай на русском. По умолчанию кратко: 3–5 предложений или короткий список. Расширяй только если явно просят («подробно», «расскажи больше»). Советы конкретные, на основе данных. Единицы: км, м, мин/км.`;
 
-let cachedSystemPrompt = null;
+const systemPromptCache = new Map();
 
 async function getSystemPrompt(chatId) {
-  if (cachedSystemPrompt) return cachedSystemPrompt;
+  if (systemPromptCache.has(chatId)) return systemPromptCache.get(chatId);
   const { data, error } = await supabase
     .from('users')
     .select('profile_text')
     .eq('telegram_chat_id', chatId)
     .single();
   if (error || !data?.profile_text) throw new Error('System prompt not found in Supabase for chat ' + chatId);
-  cachedSystemPrompt = FORMATTING_RULES + '\n\n' + data.profile_text;
-  console.log('[prompt] loaded from Supabase, length:', cachedSystemPrompt.length);
-  return cachedSystemPrompt;
+  const prompt = FORMATTING_RULES + '\n\n' + data.profile_text;
+  systemPromptCache.set(chatId, prompt);
+  console.log('[prompt] loaded from Supabase, length:', prompt.length);
+  return prompt;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,21 +129,31 @@ app.post('/webhook/telegram', async (req, res) => {
     const chatId = message.chat.id;
     const userText = message.text.trim();
 
+    const user = await findOrCreateUser(chatId);
+    if (!user.is_active) {
+      await sendTelegramMessage(chatId, 'Доступ ограничен.');
+      return;
+    }
+
     let reply;
     if (userText.startsWith('/sync30d')) {
-      await sendTelegramMessage(chatId, 'Синхронизирую активности со Strava...');
-      try {
-        const count = await syncStravaActivities();
-        reply = `Готово — синхронизировано ${count} активностей за последние 30 дней.`;
-      } catch (err) {
-        reply = `Ошибка синхронизации: ${err.message}`;
+      if (!user.strava_athlete_id) {
+        reply = 'Сначала подключи Strava: /connect';
+      } else {
+        await sendTelegramMessage(chatId, 'Синхронизирую активности со Strava...');
+        try {
+          const count = await syncStravaActivities(user.id);
+          reply = `Готово — синхронизировано ${count} активностей за последние 30 дней.`;
+        } catch (err) {
+          reply = `Ошибка синхронизации: ${err.message}`;
+        }
       }
     } else if (userText.startsWith('/feedback')) {
-      reply = await getFeedbackResponse(chatId);
+      reply = await getFeedbackResponse(user.id, chatId);
     } else if (userText.startsWith('/plan')) {
-      reply = await getPlanResponse(chatId);
+      reply = await getPlanResponse(user.id, chatId);
     } else {
-      reply = await getCoachingResponse(userText, chatId);
+      reply = await getCoachingResponse(userText, user.id, chatId);
     }
 
     await sendTelegramMessage(chatId, reply);
@@ -216,12 +227,36 @@ app.get('/setup/strava-callback', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// User helpers
+// ---------------------------------------------------------------------------
+
+async function findOrCreateUser(chatId) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('telegram_chat_id', chatId)
+    .single();
+  if (!error && data) return data;
+  const { data: created, error: insertError } = await supabase
+    .from('users')
+    .insert({ telegram_chat_id: chatId, is_active: true })
+    .select()
+    .single();
+  if (insertError) throw insertError;
+  return created;
+}
+
+// ---------------------------------------------------------------------------
 // Strava helpers — direct OAuth2, no Composio dependency
 // ---------------------------------------------------------------------------
 
-async function getStravaToken() {
-  const { data, error } = await supabase.from('strava_config').select('*').eq('id', 1).single();
-  if (error || !data) throw new Error('Strava not authorized — visit /setup/strava-oauth');
+async function getStravaToken(userId) {
+  const { data, error } = await supabase
+    .from('strava_tokens')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+  if (error || !data) throw new Error('Strava не подключена. Используй /connect');
 
   // Refresh if token expires within 5 minutes
   if (Date.now() / 1000 > data.expires_at - 300) {
@@ -237,8 +272,8 @@ async function getStravaToken() {
     });
     if (!r.ok) throw new Error(`Strava token refresh failed: ${r.status}`);
     const refreshed = await r.json();
-    await supabase.from('strava_config').upsert({
-      id: 1,
+    await supabase.from('strava_tokens').upsert({
+      user_id: userId,
       access_token: refreshed.access_token,
       refresh_token: refreshed.refresh_token,
       expires_at: refreshed.expires_at,
@@ -249,9 +284,9 @@ async function getStravaToken() {
   return data.access_token;
 }
 
-async function syncStravaActivities() {
+async function syncStravaActivities(userId) {
   try {
-    const token = await getStravaToken();
+    const token = await getStravaToken(userId);
     const since = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
     const r = await fetch(
       `https://www.strava.com/api/v3/athlete/activities?after=${since}&per_page=30`,
@@ -264,6 +299,7 @@ async function syncStravaActivities() {
       supabase.from('activities').upsert(
         {
           strava_id: a.id,
+          user_id: userId,
           type: a.sport_type ?? a.type ?? 'Unknown',
           distance_m: a.distance ?? 0,
           moving_time_s: a.moving_time ?? 0,
@@ -283,9 +319,17 @@ async function syncStravaActivities() {
   }
 }
 
-async function fetchStravaActivity(activityId) {
+async function fetchStravaActivity(activityId, userId = null) {
   try {
-    const token = await getStravaToken();
+    let token;
+    if (userId) {
+      token = await getStravaToken(userId);
+    } else {
+      // Webhook context: no userId — fall back to strava_config
+      const { data } = await supabase.from('strava_config').select('access_token').eq('id', 1).single();
+      if (!data?.access_token) throw new Error('No Strava token available');
+      token = data.access_token;
+    }
     const r = await fetch(
       `https://www.strava.com/api/v3/activities/${activityId}`,
       { headers: { Authorization: `Bearer ${token}` } }
@@ -302,13 +346,14 @@ async function fetchStravaActivity(activityId) {
 // Coaching logic
 // ---------------------------------------------------------------------------
 
-async function getCoachingResponse(userText, chatId) {
+async function getCoachingResponse(userText, userId, chatId) {
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
   const { data: activities, error } = await supabase
     .from('activities')
     .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
+    .eq('user_id', userId)
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
@@ -406,13 +451,14 @@ function formatActivities(activities) {
     .join('\n');
 }
 
-async function getFeedbackResponse(chatId) {
+async function getFeedbackResponse(userId, chatId) {
   const since = new Date();
   since.setDate(since.getDate() - 7);
 
   const { data: activities, error } = await supabase
     .from('activities')
     .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
+    .eq('user_id', userId)
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
@@ -436,13 +482,14 @@ async function getFeedbackResponse(chatId) {
   return response.content[0].text;
 }
 
-async function getPlanResponse(chatId) {
+async function getPlanResponse(userId, chatId) {
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
   const { data: activities, error } = await supabase
     .from('activities')
     .select('strava_id, type, distance_m, moving_time_s, started_at, raw')
+    .eq('user_id', userId)
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
