@@ -369,9 +369,15 @@ async function syncStravaActivities(userId) {
       { headers: { Authorization: `Bearer ${token}` } }
     );
     if (!r.ok) throw new Error(`Strava API ${r.status}`);
-    const activities = await r.json();
+    const summaries = await r.json();
 
-    const upserts = activities.map((a) =>
+    // Fetch detailed activity data (includes laps, splits, best efforts)
+    // Parallel — 30 requests is well within Strava's 200/15min rate limit
+    const detailed = await Promise.all(
+      summaries.map((a) => fetchStravaActivity(a.id, userId).then((d) => d ?? a))
+    );
+
+    const upserts = detailed.map((a) =>
       supabase.from('activities').upsert(
         {
           strava_id: a.id,
@@ -387,8 +393,8 @@ async function syncStravaActivities(userId) {
     );
 
     await Promise.all(upserts);
-    console.log(`[strava] synced ${activities.length} activities`);
-    return activities.length;
+    console.log(`[strava] synced ${detailed.length} activities (detailed)`);
+    return detailed.length;
   } catch (err) {
     console.error('[strava] sync error:', err.message);
     throw err;
@@ -508,18 +514,22 @@ function formatActivities(activities) {
       let lapsStr = '';
       const laps = a.raw?.laps;
       if (Array.isArray(laps) && laps.length > 1) {
-        const valid = laps.filter((l) => l.distance > 0 && l.moving_time > 0);
+        // Filter out GPS artifacts (< 50m or < 10s)
+        const valid = laps.filter((l) => l.distance > 50 && l.moving_time > 10);
         if (valid.length > 1) {
-          const avgPace =
-            valid.reduce((s, l) => s + l.moving_time / 60 / (l.distance / 1000), 0) /
-            valid.length;
-          const paceStr = `${Math.floor(avgPace)}:${String(Math.round((avgPace % 1) * 60)).padStart(2, '0')}`;
-          const hrLaps = valid.filter((l) => l.average_heartrate);
-          const hrStr =
-            hrLaps.length > 0
-              ? ` | HR ${Math.round(hrLaps.reduce((s, l) => s + l.average_heartrate, 0) / hrLaps.length)}`
+          const lapLines = valid.map((l) => {
+            const lapDist = (l.distance / 1000).toFixed(2);
+            const lapPace = l.moving_time / 60 / (l.distance / 1000);
+            const lapPaceStr = `${Math.floor(lapPace)}:${String(Math.round((lapPace % 1) * 60)).padStart(2, '0')}`;
+            const lapHr = l.average_heartrate
+              ? ` HR${Math.round(l.average_heartrate)}/${Math.round(l.max_heartrate)}`
               : '';
-          lapsStr = ` | Лапы: ${valid.length}×[${paceStr} мин/км${hrStr}]`;
+            const lapElev = l.total_elevation_gain > 0
+              ? ` D+${Math.round(l.total_elevation_gain)}м`
+              : '';
+            return `#${l.lap_index}:${lapDist}км ${lapPaceStr}${lapHr}${lapElev}`;
+          });
+          lapsStr = `\n  Лапы(${valid.length}): ${lapLines.join(' | ')}`;
         }
       }
 
