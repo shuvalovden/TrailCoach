@@ -588,10 +588,12 @@ async function getPlanResponse(userId, chatId) {
   const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
   const DAY_ABBR = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
   const today = new Date();
-  const dow = today.getDay();
-  const daysUntilMon = ((8 - dow) % 7) || 7;
+  const dow = today.getDay(); // 0=Sun, 1=Mon … 6=Sat
+  // Mon/Tue/Wed → plan for current week; otherwise → next week
+  const daysToMonday = (dow >= 1 && dow <= 3) ? -(dow - 1) : (((8 - dow) % 7) || 7);
+  const isCurrentWeek = dow >= 1 && dow <= 3;
   const monday = new Date(today);
-  monday.setDate(today.getDate() + daysUntilMon);
+  monday.setDate(today.getDate() + daysToMonday);
   const weekDatesStr = DAY_ABBR.map((abbr, i) => {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
@@ -608,7 +610,7 @@ async function getPlanResponse(userId, chatId) {
     messages: [
       {
         role: 'user',
-        content: `Тренировки за последние 30 дней:\n${summary}\n\nДаты следующей недели: ${weekDatesStr}\n\nСоставь план на эту неделю. Для каждого дня используй заголовок формата <b>День недели, DD месяц</b> — затем тип, длительность/дистанция, пульсовые зоны, ключевой акцент. Без вводных фраз. Учитывай фазу (май 2026 — восстановление после MIUT) и нагрузку за 30 дней.\n\nФормат ответа: только HTML-теги <b> для выделения, эмодзи для разделов, никаких таблиц и markdown.`,
+        content: `Тренировки за последние 30 дней:\n${summary}\n\nДаты ${isCurrentWeek ? 'текущей' : 'следующей'} недели: ${weekDatesStr}\n\nСоставь план на эту неделю. Для каждого дня используй заголовок формата <b>День недели, DD месяц</b> — затем тип, длительность/дистанция, пульсовые зоны, ключевой акцент. Без вводных фраз. Учитывай фазу (май 2026 — восстановление после MIUT) и нагрузку за 30 дней.\n\nФормат ответа: только HTML-теги <b> для выделения, эмодзи для разделов, никаких таблиц и markdown.`,
       },
     ],
   });
