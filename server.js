@@ -22,16 +22,16 @@ const STRAVA_CLIENT_ID = '233959';
 // --- System prompt ---
 // Formatting rules are static (apply to all users). Athlete profile is fetched from
 // Supabase users.profile_text and combined with these rules at runtime.
-const FORMATTING_RULES = `ПРАВИЛА ФОРМАТИРОВАНИЯ (строго соблюдать):
-- Ответ отправляется в Telegram. Поддерживается только HTML.
-- Для выделения использовать <b>текст</b> — и ничего другого.
-- Никаких markdown-символов: не использовать ## ### ** __ --- | (таблицы).
-- Разделы обозначать эмодзи + <b>заголовок</b>, например: 📊 <b>Итоги</b>
-- Списки оформлять через • (буллет) или цифры с точкой, без markdown.
-- Никаких таблиц — только простые списки или строки текста.
-- Между разделами — одна пустая строка.
+const FORMATTING_RULES = `FORMATTING RULES (follow strictly):
+- Responses are sent via Telegram. Only HTML is supported.
+- Use <b>text</b> for emphasis — nothing else.
+- No markdown symbols: do not use ## ### ** __ --- | (tables).
+- Section headings: emoji + <b>heading</b>, e.g. 📊 <b>Weekly summary</b>
+- Lists: bullet • or numbered with a period, no markdown.
+- No tables — plain lists or text lines only.
+- One blank line between sections.
 
-Ты персональный тренер по трейловому бегу. Отвечай на русском. По умолчанию кратко: 3–5 предложений или короткий список. Расширяй только если явно просят («подробно», «расскажи больше»). Советы конкретные, на основе данных. Единицы: км, м, мин/км.`;
+You are a personal trail-running coach. Reply in English. Default to brief: 3–5 sentences or a short list. Expand only when explicitly asked ("in detail", "tell me more"). Advice should be specific and data-driven. Units: km, m, min/km.`;
 
 const systemPromptCache = new Map();
 
@@ -157,30 +157,30 @@ app.post('/webhook/telegram', async (req, res) => {
 
     const user = await findOrCreateUser(chatId);
     if (!user.is_active) {
-      await sendTelegramMessage(chatId, 'Доступ ограничен.');
+      await sendTelegramMessage(chatId, 'Access restricted.');
       return;
     }
 
     let reply;
     if (userText.startsWith('/start')) {
-      reply = `<b>Привет! Я твой персональный тренер по трейловому бегу 🏔</b>
+      reply = `<b>Hey! I'm your personal trail-running coach 🏔</b>
 
-Анализирую тренировки из Strava и даю конкретные рекомендации по подготовке.
+I analyse your Strava workouts and give concrete training recommendations.
 
-<b>Как начать:</b>
-1. Подключи Strava: /connect
-2. Загрузи тренировки: /sync30d
-3. Готово — задавай вопросы!
+<b>Getting started:</b>
+1. Connect Strava: /connect
+2. Load workouts: /sync30d
+3. Done — ask me anything!
 
-<b>Команды:</b>
-- /connect — подключить Strava-аккаунт
-- /sync30d — обновить данные из Strava (последние 30 дней)
-- /feedback — анализ тренировок за последние 7 дней
-- /plan — план тренировок на следующую неделю
-- Любой вопрос — просто напиши текстом`;
+<b>Commands:</b>
+- /connect — connect your Strava account
+- /sync30d — sync data from Strava (last 30 days)
+- /feedback — analysis of the last 7 days
+- /plan — training plan for the week
+- Any question — just type it`;
     } else if (userText.startsWith('/connect')) {
       if (user.strava_athlete_id) {
-        reply = '✅ Strava уже подключена. Используй /sync30d для обновления данных.';
+        reply = '✅ Strava is already connected. Use /sync30d to refresh your data.';
       } else {
         const redirectUri = 'https://sisu-coach-production-1fe4.up.railway.app/setup/strava-callback';
         const oauthUrl = `https://www.strava.com/oauth/authorize` +
@@ -188,18 +188,18 @@ app.post('/webhook/telegram', async (req, res) => {
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
           `&response_type=code&scope=activity%3Aread_all` +
           `&approval_prompt=force&state=${chatId}`;
-        reply = `Для подключения Strava перейди по ссылке:\n${oauthUrl}\n\nПосле авторизации бот автоматически получит доступ к твоим тренировкам.`;
+        reply = `To connect Strava, open this link:\n${oauthUrl}\n\nAfter authorising, the bot will automatically have access to your activities.`;
       }
     } else if (userText.startsWith('/sync30d')) {
       if (!user.strava_athlete_id) {
-        reply = 'Сначала подключи Strava: /connect';
+        reply = 'Connect Strava first: /connect';
       } else {
-        await sendTelegramMessage(chatId, 'Синхронизирую активности со Strava...');
+        await sendTelegramMessage(chatId, 'Syncing activities from Strava...');
         try {
           const count = await syncStravaActivities(user.id);
-          reply = `Готово — синхронизировано ${count} активностей за последние 30 дней.`;
+          reply = `Done — synced ${count} activities for the last 30 days.`;
         } catch (err) {
-          reply = `Ошибка синхронизации: ${err.message}`;
+          reply = `Sync error: ${err.message}`;
         }
       }
     } else if (userText.startsWith('/feedback')) {
@@ -214,8 +214,8 @@ app.post('/webhook/telegram', async (req, res) => {
   } catch (err) {
     console.error('[telegram] handler error:', err.message);
     const errMsg = err?.status === 529 || err?.message?.includes('overloaded')
-      ? 'Claude API перегружен, попробуй через минуту.'
-      : 'Произошла ошибка. Попробуй ещё раз.';
+      ? 'Claude API is overloaded, try again in a minute.'
+      : 'Something went wrong. Please try again.';
     sendTelegramMessage(chatId, errMsg).catch(() => {});
   }
 });
@@ -292,10 +292,10 @@ app.get('/setup/strava-callback', async (req, res) => {
     systemPromptCache.delete(chatId);
 
     await sendTelegramMessage(chatId,
-      `✅ Strava подключена! Привет, ${data.athlete.firstname}.\nНапиши /sync30d чтобы загрузить тренировки.`
+      `✅ Strava connected! Hey, ${data.athlete.firstname}.\nRun /sync30d to load your activities.`
     );
 
-    return res.send('<h2>✅ Готово! Вернись в Telegram.</h2>');
+    return res.send('<h2>✅ Done! Go back to Telegram.</h2>');
   } catch (err) {
     console.error('[strava-oauth] callback error:', err.message);
     return res.status(500).json({ error: err.message });
@@ -332,7 +332,7 @@ async function getStravaToken(userId) {
     .select('*')
     .eq('user_id', userId)
     .single();
-  if (error || !data) throw new Error('Strava не подключена. Используй /connect');
+  if (error || !data) throw new Error('Strava not connected. Use /connect');
 
   // Refresh if token expires within 5 minutes
   if (Date.now() / 1000 > data.expires_at - 300) {
@@ -442,7 +442,7 @@ async function getCoachingResponse(userText, userId, chatId) {
   if (error) throw error;
 
   const summary = formatActivities(activities ?? []);
-  if (!checkRateLimit(userId)) return 'Достигнут дневной лимит (20 запросов). Попробуй завтра.';
+  if (!checkRateLimit(userId)) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
@@ -452,7 +452,7 @@ async function getCoachingResponse(userText, userId, chatId) {
     messages: [
       {
         role: 'user',
-        content: `Последние тренировки (30 дней):\n${summary}\n\nВопрос атлета: ${userText}`,
+        content: `Recent activities (30 days):\n${summary}\n\nAthlete question: ${userText}`,
       },
     ],
   });
@@ -461,11 +461,11 @@ async function getCoachingResponse(userText, userId, chatId) {
 }
 
 function formatActivities(activities) {
-  if (!activities.length) return 'Нет тренировок за последние 30 дней.';
+  if (!activities.length) return 'No activities in the last 30 days.';
 
   return activities
     .map((a) => {
-      const date = new Date(a.started_at).toLocaleDateString('ru-RU', {
+      const date = new Date(a.started_at).toLocaleDateString('en-GB', {
         day: '2-digit',
         month: '2-digit',
       });
@@ -474,7 +474,7 @@ function formatActivities(activities) {
       const paceDecimal =
         a.distance_m > 0 ? a.moving_time_s / 60 / (a.distance_m / 1000) : null;
       const pace = paceDecimal
-        ? `${Math.floor(paceDecimal)}:${String(Math.round((paceDecimal % 1) * 60)).padStart(2, '0')} мин/км`
+        ? `${Math.floor(paceDecimal)}:${String(Math.round((paceDecimal % 1) * 60)).padStart(2, '0')} min/km`
         : '—';
 
       const elevGain = a.raw?.total_elevation_gain ? Number(a.raw.total_elevation_gain) : 0;
@@ -501,14 +501,14 @@ function formatActivities(activities) {
         ? ` | ${Math.round(a.raw.average_cadence * 2)}spm`
         : '';
       const power = a.raw?.average_watts ? ` | ${Math.round(a.raw.average_watts)}W` : '';
-      const kj = a.raw?.kilojoules ? ` | ${Math.round(a.raw.kilojoules)} кДж` : '';
+      const kj = a.raw?.kilojoules ? ` | ${Math.round(a.raw.kilojoules)} kJ` : '';
 
       const sportType = a.type ?? '';
       let activityTag = '';
       if ((sportType === 'Run' || sportType === 'TrailRun') && Number(a.raw?.workout_type) === 3) {
-        activityTag = ' [ИНТЕРВАЛЫ]';
+        activityTag = ' [INTERVALS]';
       } else if (sportType === 'WeightTraining') {
-        activityTag = ' [СИЛОВАЯ]';
+        activityTag = ' [STRENGTH]';
       }
 
       let lapsStr = '';
@@ -529,7 +529,7 @@ function formatActivities(activities) {
               : '';
             return `#${l.lap_index}:${lapDist}км ${lapPaceStr}${lapHr}${lapElev}`;
           });
-          lapsStr = `\n  Лапы(${valid.length}): ${lapLines.join(' | ')}`;
+          lapsStr = `\n  Laps(${valid.length}): ${lapLines.join(' | ')}`;
         }
       }
 
@@ -552,7 +552,7 @@ async function getFeedbackResponse(userId, chatId) {
   if (error) throw error;
 
   const summary = formatActivities(activities ?? []);
-  if (!checkRateLimit(userId)) return 'Достигнут дневной лимит (20 запросов). Попробуй завтра.';
+  if (!checkRateLimit(userId)) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
@@ -562,7 +562,7 @@ async function getFeedbackResponse(userId, chatId) {
     messages: [
       {
         role: 'user',
-        content: `Тренировки за последние 7 дней:\n${summary}\n\nДай структурированный недельный фидбек. Без лишних вводных фраз и повторов — коротко в каждой секции.\n1. Итоги недели (объём, D+, типы тренировок)\n2. Что сделано хорошо\n3. На что обратить внимание\n\nФормат ответа: только HTML-теги <b> для выделения, эмодзи для разделов, никаких таблиц и markdown.`,
+        content: `Activities over the last 7 days:\n${summary}\n\nProvide structured weekly feedback. No filler phrases or repetition — keep each section concise.\n1. Week summary (volume, D+, activity types)\n2. What went well\n3. What to pay attention to\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
       },
     ],
   });
@@ -585,8 +585,8 @@ async function getPlanResponse(userId, chatId) {
 
   const summary = formatActivities(activities ?? []);
 
-  const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
-  const DAY_ABBR = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const today = new Date();
   const dow = today.getDay(); // 0=Sun, 1=Mon … 6=Sat
   // Mon/Tue/Wed → plan for current week; otherwise → next week
@@ -600,7 +600,7 @@ async function getPlanResponse(userId, chatId) {
     return `${abbr} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
   }).join(', ');
 
-  if (!checkRateLimit(userId)) return 'Достигнут дневной лимит (20 запросов). Попробуй завтра.';
+  if (!checkRateLimit(userId)) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   const response = await anthropic.messages.create({
@@ -610,7 +610,7 @@ async function getPlanResponse(userId, chatId) {
     messages: [
       {
         role: 'user',
-        content: `Тренировки за последние 30 дней:\n${summary}\n\nДаты ${isCurrentWeek ? 'текущей' : 'следующей'} недели: ${weekDatesStr}\n\nСоставь план на эту неделю. Для каждого дня используй заголовок формата <b>День недели, DD месяц</b> — затем тип, длительность/дистанция, пульсовые зоны, ключевой акцент. Без вводных фраз. Учитывай фазу (май 2026 — восстановление после MIUT) и нагрузку за 30 дней.\n\nФормат ответа: только HTML-теги <b> для выделения, эмодзи для разделов, никаких таблиц и markdown.`,
+        content: `Activities over the last 30 days:\n${summary}\n\nDates for ${isCurrentWeek ? 'this' : 'next'} week: ${weekDatesStr}\n\nCreate a training plan for this week. For each day use a heading in the format <b>Weekday, DD Mon</b> — then type, duration/distance, HR zones, key focus. No intro phrases. Account for the current phase (May 2026 — recovery after MIUT) and the 30-day load.\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
       },
     ],
   });
@@ -625,11 +625,11 @@ async function registerTelegramCommands() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       commands: [
-        { command: 'start',    description: 'Начало работы и список команд' },
-        { command: 'connect',  description: 'Подключить Strava-аккаунт' },
-        { command: 'sync30d',  description: 'Обновить данные из Strava' },
-        { command: 'feedback', description: 'Фидбек по тренировкам за неделю' },
-        { command: 'plan',     description: 'План тренировок на неделю' },
+        { command: 'start',    description: 'Getting started and command list' },
+        { command: 'connect',  description: 'Connect your Strava account' },
+        { command: 'sync30d',  description: 'Sync data from Strava' },
+        { command: 'feedback', description: 'Weekly training feedback' },
+        { command: 'plan',     description: 'Training plan for the week' },
       ],
     }),
   });
