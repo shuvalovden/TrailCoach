@@ -182,7 +182,7 @@ I analyse your Strava workouts and give concrete training recommendations.
       if (user.strava_athlete_id) {
         reply = '✅ Strava is already connected. Use /sync30d to refresh your data.';
       } else {
-        const redirectUri = 'https://sisu-coach-production-1fe4.up.railway.app/setup/strava-callback';
+        const redirectUri = `${process.env.APP_BASE_URL}/setup/strava-callback`;
         const oauthUrl = `https://www.strava.com/oauth/authorize` +
           `?client_id=${STRAVA_CLIENT_ID}` +
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
@@ -228,7 +228,7 @@ app.get('/setup/strava-webhook', async (req, res) => {
   if (req.query.token !== process.env.COMPOSIO_WEBHOOK_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const callbackUrl = `https://sisu-coach-production-1fe4.up.railway.app/webhook/strava/${process.env.COMPOSIO_WEBHOOK_SECRET}`;
+  const callbackUrl = `${process.env.APP_BASE_URL}/webhook/strava/${process.env.COMPOSIO_WEBHOOK_SECRET}`;
   const r = await fetch('https://www.strava.com/api/v3/push_subscriptions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -248,7 +248,7 @@ app.get('/setup/strava-oauth', (req, res) => {
   if (req.query.token !== process.env.COMPOSIO_WEBHOOK_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const redirectUri = 'https://sisu-coach-production-1fe4.up.railway.app/setup/strava-callback';
+  const redirectUri = `${process.env.APP_BASE_URL}/setup/strava-callback`;
   const url = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=activity%3Aread_all&approval_prompt=force`;
   return res.redirect(url);
 });

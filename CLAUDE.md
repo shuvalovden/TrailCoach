@@ -1,6 +1,6 @@
 # TrailCoach (Sisu Coach)
 
-Personal AI trail-running coach for Denis Shuvalov. Responds in Russian via Telegram, pulls training data from Strava, stores in Supabase, generates advice with Claude.
+Personal AI trail-running coach for Denis Shuvalov. Responds in English via Telegram, pulls training data from Strava, stores in Supabase, generates advice with Claude.
 
 ## Architecture
 
@@ -10,10 +10,10 @@ graph TD
     TG["Telegram Bot API\n(webhook)"]
     Server["server.js\nExpress (CJS)"]
     Strava["Strava API\ndirect OAuth2\nGET /athlete/activities"]
-    Supabase["Supabase\nPostgres · activities table\nstrava_config table"]
+    Supabase["Supabase\nPostgres · activities table\nstrava_tokens table"]
     Claude["Claude API\n@anthropic-ai/sdk\nclaude-sonnet-4-6"]
-    Railway["Railway\nNode 20 · auto-deploy from GitHub"]
-    GitHub["GitHub\nsource / CD trigger"]
+    Azure["Azure Container Apps\nDocker · Node 20-alpine\nItaly North"]
+    GitHub["GitHub\nsource"]
 
     User -->|message / command| TG
     TG -->|POST /webhook/telegram| Server
@@ -27,20 +27,22 @@ graph TD
     Server -->|sendMessage| TG
     TG -->|reply| User
 
-    Strava -->|POST /webhook/strava/:secret\noptional native webhook| Server
-    GitHub -->|push to main| Railway
-    Railway -->|hosts| Server
+    Strava -->|POST /webhook/strava/:secret\nnative webhook| Server
+    GitHub -->|manual: deploy-azure.ps1| Azure
+    Azure -->|hosts| Server
 ```
 
 ## Data flow (on each Telegram message)
 
 1. Telegram → `POST /webhook/telegram` (verified via `X-Telegram-Bot-Api-Secret-Token`)
 2. Route command:
+   - `/start` → static welcome message with command list
+   - `/connect` → Strava OAuth2 link with `state=chatId`
    - `/sync30d` → `syncStravaActivities()` — fetch last 30 days from Strava → upsert Supabase
    - `/feedback` → `getFeedbackResponse()` — Claude analysis of last 7 days
-   - `/plan` → `getPlanResponse()` — Claude training plan for next week
+   - `/plan` → `getPlanResponse()` — Claude training plan for current or next week
    - anything else → `getCoachingResponse(text)` — reads Supabase, calls Claude
-3. Query Supabase `activities` with flat JSON field extractions (PostgREST `->>`), format as text summary
+3. Query Supabase `activities` filtered by `user_id`, format as text summary
 4. Call Claude with system prompt = static `FORMATTING_RULES` (in code) + `users.profile_text` fetched from Supabase (athlete profile, zones, plan) + summary
 5. Send Claude reply back to Telegram via `fetch` (native Node, no telegram npm package)
 
@@ -74,33 +76,35 @@ graph TD
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
 | `TELEGRAM_WEBHOOK_SECRET` | Secret for `X-Telegram-Bot-Api-Secret-Token` header |
-| `COMPOSIO_WEBHOOK_SECRET` | Secret path segment for Strava webhook URL |
+| `COMPOSIO_WEBHOOK_SECRET` | Secret path segment for Strava webhook URL and setup endpoints |
 | `STRAVA_CLIENT_SECRET` | Strava app client secret (OAuth2) |
-| `PORT` | Server port (Railway sets this automatically) |
+| `APP_BASE_URL` | Public base URL of the deployed app (used for OAuth redirect URIs and webhook registration) |
+| `PORT` | Server port (Azure sets this automatically) |
 
 ## Endpoints
 
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/webhook/telegram` | Telegram message delivery |
-| `POST` | `/webhook/strava/:secret` | Strava native webhook (optional) |
+| `POST` | `/webhook/strava/:secret` | Strava native webhook |
 | `GET` | `/webhook/strava/:secret` | Strava subscription validation challenge |
 | `GET` | `/health` | Health check |
 | `GET` | `/setup/strava-oauth` | Start Strava OAuth2 flow (one-time) |
-| `GET` | `/setup/strava-callback` | Strava OAuth2 callback; stores tokens |
+| `GET` | `/setup/strava-callback` | Strava OAuth2 callback; stores tokens per user |
 | `GET` | `/setup/strava-webhook` | Register Strava push subscription (one-time) |
 
 ## Key notes
 
-- **No Composio**: Strava access is direct OAuth2. Tokens stored in `strava_tokens` (per user) — primary store. `strava_config` (id=1) is legacy and no longer actively used (webhook now routes by `owner_id`). Auto-refresh if expiry within 5 min.
+- **No Composio**: Strava access is direct OAuth2. Tokens stored in `strava_tokens` per user (primary store). `strava_config` (id=1) is legacy — only used as fallback in `fetchStravaActivity` when `userId` is null. Auto-refresh if token expiry within 5 min.
 - **Strava account**: Denis Shuvalov, athlete id: 46894875, Strava app client_id: 233959, telegram_chat_id: 546691918.
-- **Pull model**: Strava data is fetched on demand via `/sync30d` command. Native webhook at `/webhook/strava/:secret` is optional for real-time ingestion.
+- **Pull model**: Strava data is fetched on demand via `/sync30d`. Native webhook at `/webhook/strava/:secret` handles real-time ingestion; routes to the correct user by `owner_id`.
 - **Supabase select**: `activities` query reads full `raw` JSONB column; `formatActivities()` accesses fields via `a.raw?.field`.
-- **System prompt**: static `FORMATTING_RULES` (in `server.js`) + per-user `users.profile_text` from Supabase. Combined by `getSystemPrompt(chatId)`, cached per chatId in a `Map` (no cross-user cache pollution).
+- **System prompt**: static `FORMATTING_RULES` (in `server.js`) + per-user `users.profile_text` from Supabase. Combined by `getSystemPrompt(chatId)`, cached per `chatId` in a `Map` (no cross-user cache pollution).
 - **Multi-user**: `findOrCreateUser(chatId)` resolves user on every Telegram message. `is_active` flag gates access. All activity queries filtered by `user_id`. Strava functions take `userId` (uuid from `users` table).
 - **Rate limiter**: in-memory `Map` per `userId`, 20 AI requests/user/day (resets at midnight UTC). Applied in `getCoachingResponse`, `getFeedbackResponse`, `getPlanResponse`. Not applied to `/sync30d` or `/connect`.
 - **Security**: `users.is_active` flag manually set in Supabase to block a user. Checked on every Telegram message before any processing.
-- **Deployment**: Railway auto-deploys on push to `main` in GitHub. Node ≥ 20 required.
+- **Deployment**: Docker image built and pushed to Azure Container Registry (`trailcoachreg`), deployed to Azure Container Apps (`trailcoach-app`, resource group `trailcoach-rg`, Italy North). Run `.\deploy-azure.ps1` to deploy. No CI/CD — manual trigger only.
+- **APP_BASE_URL**: used for Strava OAuth redirect URI and webhook callback URL. Set via env var — no hardcoded URLs in code.
 
 ## Database schema
 
@@ -137,7 +141,7 @@ CREATE TABLE activities (
 );
 -- Indexes: activities(user_id, started_at DESC)
 
--- Legacy single-user token store (still used by server.js)
+-- Legacy single-user token store (fallback only in fetchStravaActivity)
 CREATE TABLE strava_config (
   id            int PRIMARY KEY,
   access_token  text,
