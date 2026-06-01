@@ -848,6 +848,47 @@ function alertAdmin(message) {
   sendTelegramMessage(ADMIN_CHAT_ID, message).catch(() => {});
 }
 
+// metrics_daily schema (run once in Supabase SQL editor):
+// CREATE TABLE IF NOT EXISTS metrics_daily (
+//   date               date PRIMARY KEY,
+//   telegram_messages  int DEFAULT 0,
+//   claude_calls       int DEFAULT 0,
+//   claude_errors      int DEFAULT 0,
+//   tokens_input       bigint DEFAULT 0,
+//   tokens_output      bigint DEFAULT 0,
+//   strava_syncs       int DEFAULT 0,
+//   strava_sync_errors int DEFAULT 0,
+//   strava_webhooks    int DEFAULT 0,
+//   supabase_errors    int DEFAULT 0,
+//   ratelimit_hits     int DEFAULT 0,
+//   updated_at         timestamptz DEFAULT now()
+// );
+async function flushMetrics() {
+  const date = new Date().toISOString().slice(0, 10);
+  const { error } = await supabase.from('metrics_daily').upsert(
+    {
+      date,
+      telegram_messages:  metrics.telegram.messages_total,
+      claude_calls:       metrics.claude.calls_total,
+      claude_errors:      metrics.claude.errors_total,
+      tokens_input:       metrics.claude.tokens_input,
+      tokens_output:      metrics.claude.tokens_output,
+      strava_syncs:       metrics.strava.syncs_total,
+      strava_sync_errors: metrics.strava.sync_errors,
+      strava_webhooks:    metrics.strava.webhook_events,
+      supabase_errors:    metrics.supabase.errors_total,
+      ratelimit_hits:     metrics.ratelimit.hits_total,
+      updated_at:         new Date().toISOString(),
+    },
+    { onConflict: 'date' }
+  );
+  if (error) {
+    console.error('[metrics] flush failed:', error.message);
+  } else {
+    console.log('[metrics] flushed to Supabase for', date);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
@@ -857,4 +898,11 @@ app.listen(PORT, () => {
   registerTelegramCommands().catch((err) =>
     console.error('[telegram] registerTelegramCommands error:', err.message)
   );
+  setInterval(flushMetrics, 3 * 60 * 60 * 1000); // every 3 hours
+
+  process.on('SIGTERM', async () => {
+    console.log('[metrics] SIGTERM received — flushing metrics before shutdown');
+    await flushMetrics();
+    process.exit(0);
+  });
 });

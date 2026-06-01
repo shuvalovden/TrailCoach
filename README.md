@@ -113,6 +113,67 @@ The script builds the Docker image, pushes to ACR, updates the container app, an
 
 Rate limit: 20 AI requests per user per day (resets at midnight UTC). `/sync30d` and `/connect` are not rate-limited.
 
+## Monitoring
+
+### Real-time (in-memory)
+
+`GET /health` returns a full metrics snapshot alongside uptime and memory:
+
+```json
+{
+  "ok": true,
+  "uptime_s": 3600,
+  "memory_mb": 64,
+  "metrics": {
+    "telegram": { "messages_total": 42, "messages_by_command": { "feedback": 10, ... }, "send_failures": 0 },
+    "claude":   { "calls_total": 30, "errors_total": 0, "tokens_input": 45000, "tokens_output": 12000, "latency_p50_ms": 1800, "latency_p90_ms": 3200 },
+    "strava":   { "syncs_total": 5, "sync_errors": 0, "webhook_events": 12, "token_refreshes": 1 },
+    "supabase": { "errors_total": 0 },
+    "ratelimit":{ "hits_total": 0 }
+  }
+}
+```
+
+Counters reset on container restart.
+
+### Persistent (Supabase)
+
+`flushMetrics()` upserts daily totals to `metrics_daily` every 3 hours and on `SIGTERM` (graceful shutdown). Each flush overwrites today's row with the current in-memory values — no SQL increments needed.
+
+Before first deploy, create the table in the Supabase SQL editor:
+
+```sql
+CREATE TABLE IF NOT EXISTS metrics_daily (
+  date               date PRIMARY KEY,
+  telegram_messages  int DEFAULT 0,
+  claude_calls       int DEFAULT 0,
+  claude_errors      int DEFAULT 0,
+  tokens_input       bigint DEFAULT 0,
+  tokens_output      bigint DEFAULT 0,
+  strava_syncs       int DEFAULT 0,
+  strava_sync_errors int DEFAULT 0,
+  strava_webhooks    int DEFAULT 0,
+  supabase_errors    int DEFAULT 0,
+  ratelimit_hits     int DEFAULT 0,
+  updated_at         timestamptz DEFAULT now()
+);
+```
+
+### Structured logs
+
+Key events are logged with `key=value` pairs — searchable in Azure Container Apps log stream:
+
+```
+[claude] call command=feedback latency_ms=1240 tokens_in=850 tokens_out=620
+[strava] sync user_id=<uuid> count=18 latency_ms=3400
+[ratelimit] hit user_id=<uuid> command=feedback
+[metrics] flushed to Supabase for 2026-06-01
+```
+
+### Admin alerts
+
+Critical errors (Strava upsert failure, sync error, unhandled handler error) are sent as Telegram messages to the admin chat (`546691918`).
+
 ## Database
 
 **users**
@@ -145,3 +206,19 @@ Rate limit: 20 AI requests per user per day (resets at midnight UTC). `/sync30d`
 | moving_time_s | int | |
 | started_at | timestamptz | Indexed with user_id |
 | raw | jsonb | Full Strava activity object |
+
+**metrics_daily**
+| Column | Type | Notes |
+|---|---|---|
+| date | date | Primary key |
+| telegram_messages | int | Total messages received |
+| claude_calls | int | Total `messages.create()` calls |
+| claude_errors | int | Claude API errors |
+| tokens_input | bigint | Cumulative input tokens |
+| tokens_output | bigint | Cumulative output tokens |
+| strava_syncs | int | `/sync30d` invocations |
+| strava_sync_errors | int | Failed syncs |
+| strava_webhooks | int | Webhook events received |
+| supabase_errors | int | Any Supabase call errors |
+| ratelimit_hits | int | Rate limit rejections |
+| updated_at | timestamptz | Last flush timestamp |

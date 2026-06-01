@@ -105,6 +105,8 @@ graph TD
 - **Security**: `users.is_active` flag manually set in Supabase to block a user. Checked on every Telegram message before any processing.
 - **Deployment**: Docker image built and pushed to Azure Container Registry (`trailcoachreg`), deployed to Azure Container Apps (`trailcoach-app`, resource group `trailcoach-rg`, Italy North). Run `.\deploy-azure.ps1` to deploy. No CI/CD — manual trigger only.
 - **APP_BASE_URL**: used for Strava OAuth redirect URI and webhook callback URL. Set via env var — no hardcoded URLs in code.
+- **Monitoring (in-memory)**: module-level `metrics` object tracks counters (telegram messages, Claude calls/tokens/errors, Strava syncs/webhooks/token refreshes, Supabase errors, rate limit hits) and Claude latency (last 10 calls for p50/p90). Exposed via `GET /health`. Resets on restart.
+- **Monitoring (persistent)**: `flushMetrics()` upserts daily aggregates to `metrics_daily` table every 3 hours via `setInterval`, and on `SIGTERM` before shutdown. Overwrites the row for today with current in-memory totals — no SQL increments.
 
 ## Database schema
 
@@ -147,5 +149,21 @@ CREATE TABLE strava_config (
   access_token  text,
   refresh_token text,
   expires_at    bigint
+);
+
+-- Daily metrics (persistent; flushed every 3h and on SIGTERM)
+CREATE TABLE IF NOT EXISTS metrics_daily (
+  date               date PRIMARY KEY,
+  telegram_messages  int DEFAULT 0,
+  claude_calls       int DEFAULT 0,
+  claude_errors      int DEFAULT 0,
+  tokens_input       bigint DEFAULT 0,
+  tokens_output      bigint DEFAULT 0,
+  strava_syncs       int DEFAULT 0,
+  strava_sync_errors int DEFAULT 0,
+  strava_webhooks    int DEFAULT 0,
+  supabase_errors    int DEFAULT 0,
+  ratelimit_hits     int DEFAULT 0,
+  updated_at         timestamptz DEFAULT now()
 );
 ```
