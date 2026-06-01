@@ -16,14 +16,14 @@ On `/sync30d` the server fetches the last 30 detailed activities from Strava and
 
 ## Demo
 
-**Weekly feedback** — `/feedback` analyses the last 7 days of Strava activities:
-![Weekly feedback](docs/screenshots/demo_feedback.png)
-
-**Training plan** — `/plan` generates a day-by-day plan for the next week based on the last 30 days:
-![Training plan](docs/screenshots/demo_plan.png)
-
-**Free-form coaching** — ask anything, the bot answers using your actual training data:
-![Free-form coaching](docs/screenshots/demo_freetext.png)
+<p align="center">
+  <img src="docs/screenshots/demo_feedback.png" width="30%" alt="Weekly feedback"/>
+  <img src="docs/screenshots/demo_plan.png" width="30%" alt="Training plan"/>
+  <img src="docs/screenshots/demo_freetext.png" width="30%" alt="Free-form coaching"/>
+</p>
+<p align="center">
+  <em>Weekly feedback &nbsp;·&nbsp; Training plan &nbsp;·&nbsp; Free-form coaching</em>
+</p>
 
 ## Stack
 
