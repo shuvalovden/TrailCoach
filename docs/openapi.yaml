@@ -9,7 +9,7 @@ info:
     name: TaurDT
 
 servers:
-  - url: https://trailcoach-app.whitewave-283233b2.italynorth.azurecontainerapps.io
+  - url: https://your-app.azurecontainerapps.io
     description: Production (Azure Container Apps)
   - url: http://localhost:3000
     description: Local development
