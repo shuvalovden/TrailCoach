@@ -1,4 +1,4 @@
-# TrailCoach (Sisu Coach)
+# TrailCoach
 
 A personal AI trail-running coach that connects Telegram, Strava, and Claude to deliver data-driven training advice.
 
