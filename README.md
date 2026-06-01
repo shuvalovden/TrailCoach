@@ -14,6 +14,17 @@ Telegram → Express (Azure Container Apps) → Supabase → Claude API
 
 On `/sync30d` the server fetches the last 30 detailed activities from Strava and upserts them into Supabase. All subsequent coaching queries read from Supabase — no live Strava calls.
 
+## Demo
+
+**Weekly feedback** — `/feedback` analyses the last 7 days of Strava activities:
+![Weekly feedback](docs/screenshots/demo_feedback.png)
+
+**Training plan** — `/plan` generates a day-by-day plan for the next week based on the last 30 days:
+![Training plan](docs/screenshots/demo_plan.png)
+
+**Free-form coaching** — ask anything, the bot answers using your actual training data:
+![Free-form coaching](docs/screenshots/demo_freetext.png)
+
 ## Stack
 
 | Technology | Role |
