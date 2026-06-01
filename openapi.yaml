@@ -1,0 +1,586 @@
+openapi: 3.1.0
+info:
+  title: Sisu Coach API
+  description: >
+    Personal AI trail-running coach for Denis Shuvalov.
+    Receives Telegram messages, syncs Strava activities, generates coaching advice via Claude.
+  version: 1.0.0
+  contact:
+    name: TaurDT
+
+servers:
+  - url: https://trailcoach-app.whitewave-283233b2.italynorth.azurecontainerapps.io
+    description: Production (Azure Container Apps)
+  - url: http://localhost:3000
+    description: Local development
+
+# ---------------------------------------------------------------------------
+# Security schemes
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    TelegramWebhookSecret:
+      type: apiKey
+      in: header
+      name: X-Telegram-Bot-Api-Secret-Token
+      description: Secret token set when registering the Telegram webhook.
+
+    StravaWebhookSecret:
+      type: apiKey
+      in: path
+      name: secret
+      description: >
+        Secret path segment (`COMPOSIO_WEBHOOK_SECRET`) embedded in the URL.
+        Strava and setup endpoints use this for authentication.
+
+  # ---------------------------------------------------------------------------
+  # Reusable schemas
+  # ---------------------------------------------------------------------------
+  schemas:
+
+    HealthResponse:
+      type: object
+      required: [ok, ts, v]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        ts:
+          type: string
+          format: date-time
+          description: Server time at the moment of the request.
+          example: "2026-05-03T12:00:00.000Z"
+        v:
+          type: string
+          description: Deployment variant tag.
+          example: direct-strava
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: Unauthorized
+
+    OkResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          example: true
+
+    # --- Telegram ---
+
+    TelegramUser:
+      type: object
+      properties:
+        id:
+          type: integer
+        is_bot:
+          type: boolean
+        first_name:
+          type: string
+        username:
+          type: string
+        language_code:
+          type: string
+
+    TelegramChat:
+      type: object
+      required: [id, type]
+      properties:
+        id:
+          type: integer
+          description: Unique identifier for this chat.
+        type:
+          type: string
+          enum: [private, group, supergroup, channel]
+        first_name:
+          type: string
+        username:
+          type: string
+
+    TelegramMessage:
+      type: object
+      required: [message_id, chat, date]
+      properties:
+        message_id:
+          type: integer
+        from:
+          $ref: '#/components/schemas/TelegramUser'
+        chat:
+          $ref: '#/components/schemas/TelegramChat'
+        date:
+          type: integer
+          description: Unix timestamp when the message was sent.
+        text:
+          type: string
+          description: Text content of the message. Only text messages are processed; others are silently ignored.
+          example: "Как прошла моя тренировка вчера?"
+
+    TelegramUpdate:
+      type: object
+      required: [update_id]
+      properties:
+        update_id:
+          type: integer
+          description: Unique update identifier.
+        message:
+          $ref: '#/components/schemas/TelegramMessage'
+
+    # --- Strava webhook ---
+
+    StravaWebhookEventNative:
+      type: object
+      description: >
+        Native Strava push subscription event format.
+        Only `create` events for `activity` are processed; all others are accepted but ignored.
+      required: [object_type, aspect_type, object_id, owner_id, subscription_id, event_time]
+      properties:
+        object_type:
+          type: string
+          enum: [activity, athlete]
+          example: activity
+        aspect_type:
+          type: string
+          enum: [create, update, delete]
+          example: create
+        object_id:
+          type: integer
+          description: Strava activity ID.
+          example: 14123456789
+        owner_id:
+          type: integer
+          description: Strava athlete ID.
+          example: 46894875
+        subscription_id:
+          type: integer
+        event_time:
+          type: integer
+          description: Unix timestamp of the event.
+
+    StravaActivity:
+      type: object
+      description: Strava activity object (subset of fields used by the coach).
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          example: "Morning Trail Run"
+        sport_type:
+          type: string
+          example: TrailRun
+        type:
+          type: string
+          description: Legacy type field (fallback when sport_type is absent).
+          example: Run
+        distance:
+          type: number
+          format: float
+          description: Distance in metres.
+          example: 12340.5
+        moving_time:
+          type: integer
+          description: Moving time in seconds.
+          example: 5400
+        start_date:
+          type: string
+          format: date-time
+          example: "2026-05-01T07:15:00Z"
+        start_date_local:
+          type: string
+          format: date-time
+          example: "2026-05-01T09:15:00+02:00"
+        total_elevation_gain:
+          type: number
+          format: float
+          description: Elevation gain in metres.
+          example: 450.0
+        average_heartrate:
+          type: number
+          format: float
+          example: 148.3
+        max_heartrate:
+          type: number
+          format: float
+          example: 172.0
+        average_cadence:
+          type: number
+          format: float
+          description: Steps per second (multiply by 2 for spm).
+          example: 87.5
+        average_watts:
+          type: number
+          format: float
+          example: 215.0
+
+    StravaWebhookUpsertResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          example: true
+
+    # --- Setup ---
+
+    StravaWebhookSetupResponse:
+      type: object
+      required: [strava_status, data]
+      properties:
+        strava_status:
+          type: integer
+          description: HTTP status returned by the Strava API.
+          example: 201
+        data:
+          type: object
+          description: Raw JSON response from Strava push_subscriptions endpoint.
+          properties:
+            id:
+              type: integer
+              description: Strava subscription ID.
+              example: 287654
+
+    StravaCallbackResponse:
+      type: object
+      required: [ok, athlete]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        athlete:
+          type: string
+          description: Athlete's first name returned by Strava.
+          example: Denis
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  /health:
+    get:
+      summary: Health check
+      description: Returns server status and timestamp. No authentication required.
+      operationId: getHealth
+      tags: [System]
+      responses:
+        "200":
+          description: Server is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  # --- Telegram webhook ---
+
+  /webhook/telegram:
+    post:
+      summary: Telegram message delivery
+      description: >
+        Telegram sends all bot updates here. The server responds **200 immediately** to
+        prevent Telegram retries, then processes the message asynchronously:
+        syncs Strava activities, queries Supabase for the last 30 days, calls Claude,
+        and sends the coaching reply back via Telegram Bot API.
+
+        Only `message.text` updates are processed; all others are silently ignored.
+      operationId: postTelegramWebhook
+      tags: [Telegram]
+      security:
+        - TelegramWebhookSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramUpdate'
+            example:
+              update_id: 100500
+              message:
+                message_id: 42
+                from:
+                  id: 123456789
+                  is_bot: false
+                  first_name: Denis
+                  username: taurdt
+                  language_code: ru
+                chat:
+                  id: 123456789
+                  type: private
+                  first_name: Denis
+                  username: taurdt
+                date: 1746270000
+                text: "Как прошла моя тренировка вчера?"
+      responses:
+        "200":
+          description: >
+            Always returned immediately upon receiving a valid request.
+            Actual coaching reply is sent asynchronously via Telegram Bot API.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        "401":
+          description: Missing or invalid `X-Telegram-Bot-Api-Secret-Token` header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # --- Strava webhook ---
+
+  /webhook/strava/{secret}:
+    parameters:
+      - name: secret
+        in: path
+        required: true
+        description: Must equal `COMPOSIO_WEBHOOK_SECRET` env var.
+        schema:
+          type: string
+
+    get:
+      summary: Strava webhook subscription validation
+      description: >
+        Called by Strava when registering a push subscription. Responds with the
+        `hub.challenge` value to confirm ownership of the endpoint.
+      operationId: getStravaWebhookChallenge
+      tags: [Strava]
+      parameters:
+        - name: hub.mode
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [subscribe]
+        - name: hub.verify_token
+          in: query
+          required: true
+          description: Must match `COMPOSIO_WEBHOOK_SECRET`.
+          schema:
+            type: string
+        - name: hub.challenge
+          in: query
+          required: true
+          description: Random string from Strava that must be echoed back.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Challenge echoed back — subscription confirmed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["hub.challenge"]
+                properties:
+                  hub.challenge:
+                    type: string
+                    example: "15f7vmm4"
+        "401":
+          description: Invalid secret path segment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: hub.mode or hub.verify_token mismatch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Strava activity push event
+      description: >
+        Receives Strava push subscription events. Supports two body formats:
+
+        1. **Native Strava format** (`object_type: "activity"`, `aspect_type: "create"`):
+           only the `object_id` is present; the full activity is fetched from the Strava API.
+
+        2. **Composio / custom format**: body contains the full activity object under
+           `data`, `triggerData`, `payload`, or at root level.
+
+        The activity is upserted into the Supabase `activities` table.
+      operationId: postStravaWebhook
+      tags: [Strava]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/StravaWebhookEventNative'
+                - $ref: '#/components/schemas/StravaActivity'
+            examples:
+              native:
+                summary: Native Strava event
+                value:
+                  object_type: activity
+                  aspect_type: create
+                  object_id: 14123456789
+                  owner_id: 46894875
+                  subscription_id: 287654
+                  event_time: 1746270000
+              composio:
+                summary: Composio trigger payload
+                value:
+                  data:
+                    id: 14123456789
+                    sport_type: TrailRun
+                    distance: 12340.5
+                    moving_time: 5400
+                    start_date: "2026-05-01T07:15:00Z"
+                    total_elevation_gain: 450
+                    average_heartrate: 148.3
+                    max_heartrate: 172.0
+      responses:
+        "200":
+          description: Activity upserted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StravaWebhookUpsertResponse'
+        "400":
+          description: Activity ID could not be determined from the request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Invalid secret path segment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Supabase upsert failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # --- Setup endpoints (one-time, admin) ---
+
+  /setup/strava-webhook:
+    get:
+      summary: Register Strava push subscription (one-time setup)
+      description: >
+        Calls the Strava API to create a push subscription pointing to
+        `/webhook/strava/{secret}`. Run once after initial deployment.
+        Authenticated via `?token=` query parameter.
+      operationId: setupStravaWebhook
+      tags: [Setup]
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: Must equal `COMPOSIO_WEBHOOK_SECRET`.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Strava API response forwarded as-is.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StravaWebhookSetupResponse'
+        "401":
+          description: Invalid token query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /setup/strava-oauth:
+    get:
+      summary: Start Strava OAuth2 flow (one-time setup)
+      description: >
+        Redirects the browser to the Strava authorization page.
+        After the athlete grants access, Strava redirects to `/setup/strava-callback`.
+        Authenticated via `?token=` query parameter.
+      operationId: setupStravaOAuth
+      tags: [Setup]
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: Must equal `COMPOSIO_WEBHOOK_SECRET`.
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to Strava authorization URL.
+          headers:
+            Location:
+              schema:
+                type: string
+              example: "https://www.strava.com/oauth/authorize?client_id=233959&..."
+        "401":
+          description: Invalid token query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /setup/strava-callback:
+    get:
+      summary: Strava OAuth2 callback — stores tokens
+      description: >
+        Strava redirects here after the athlete authorizes the app.
+        Exchanges the `code` for access/refresh tokens via the Strava token endpoint
+        and stores them in the `strava_config` Supabase table (row id=1).
+      operationId: setupStravaCallback
+      tags: [Setup]
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: Authorization code from Strava.
+          schema:
+            type: string
+        - name: scope
+          in: query
+          description: Granted scopes (provided by Strava, not validated here).
+          schema:
+            type: string
+            example: "activity:read_all"
+        - name: state
+          in: query
+          description: State parameter (not used by this implementation).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tokens stored successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StravaCallbackResponse'
+        "400":
+          description: No `code` query parameter present.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Token exchange failed or Supabase write error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+tags:
+  - name: System
+    description: Service health and diagnostics.
+  - name: Telegram
+    description: Telegram Bot webhook — main user-facing entry point.
+  - name: Strava
+    description: Strava push subscription webhook for real-time activity ingestion.
+  - name: Setup
+    description: One-time admin endpoints for OAuth and webhook registration. Not for regular use.

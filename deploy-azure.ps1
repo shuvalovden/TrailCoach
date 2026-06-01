@@ -21,7 +21,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Docker push failed" -ForegroundColor Red;
 
 # --- 2. Sync env vars from .env ---
 Write-Host "=== Syncing env vars ===" -ForegroundColor Cyan
-$skipKeys = @('RAILWAY_API_KEY', 'PORT', 'COMPOSIO_API_KEY')
+$skipKeys = @('PORT', 'COMPOSIO_API_KEY')
 $envVars = Get-Content .env |
     Where-Object { $_ -match '^\s*[A-Z_]+=.+' } |
     Where-Object { $key = ($_ -split '=', 2)[0].Trim(); $skipKeys -notcontains $key } |
