@@ -48,7 +48,7 @@ On `/sync30d` the server fetches the last 30 detailed activities from Strava and
 | `TELEGRAM_WEBHOOK_SECRET` | Validates incoming Telegram webhook requests |
 | `COMPOSIO_WEBHOOK_SECRET` | Secret path segment in Strava webhook URL; also gates `/setup/*` endpoints |
 | `STRAVA_CLIENT_SECRET` | Strava OAuth2 app secret |
-| `APP_BASE_URL` | Public base URL of the deployed app (e.g. `https://trailcoach-app.whitewave-283233b2.italynorth.azurecontainerapps.io`) |
+| `APP_BASE_URL` | Public base URL of the deployed app (e.g. `https://your-app.italynorth.azurecontainerapps.io`) |
 | `PORT` | Server port — set automatically by Azure |
 
 ## Deploy to Azure
@@ -183,7 +183,7 @@ Key events are logged with `key=value` pairs — searchable in Azure Container A
 
 ### Admin alerts
 
-Critical errors (Strava upsert failure, sync error, unhandled handler error) are sent as Telegram messages to the admin chat (`546691918`).
+Critical errors (Strava upsert failure, sync error, unhandled handler error) are sent as Telegram messages to the admin chat.
 
 ## Database
 
