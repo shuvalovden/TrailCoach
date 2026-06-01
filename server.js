@@ -18,6 +18,39 @@ const supabase = createClient(
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const STRAVA_CLIENT_ID = '233959';
+const ADMIN_CHAT_ID = 546691918;
+
+// --- Metrics (in-memory, reset on restart) ---
+const metrics = {
+  telegram: {
+    messages_total: 0,
+    messages_by_command: { start: 0, connect: 0, sync30d: 0, feedback: 0, plan: 0, freetext: 0 },
+    send_failures: 0,
+  },
+  claude: {
+    calls_total: 0,
+    errors_total: 0,
+    tokens_input: 0,
+    tokens_output: 0,
+    latency_ms_last: 0,
+    latency_last10: [],
+  },
+  strava: {
+    syncs_total: 0,
+    sync_errors: 0,
+    webhook_events: 0,
+    token_refreshes: 0,
+    sync_latency_ms_last: 0,
+  },
+  supabase: { errors_total: 0 },
+  ratelimit: { hits_total: 0 },
+};
+
+function calcPercentile(arr, p) {
+  if (!arr.length) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.min(Math.floor((p / 100) * sorted.length), sorted.length - 1)];
+}
 
 // --- System prompt ---
 // Formatting rules are static (apply to all users). Athlete profile is fetched from
@@ -42,7 +75,10 @@ async function getSystemPrompt(chatId) {
     .select('profile_text')
     .eq('telegram_chat_id', chatId)
     .single();
-  if (error || !data?.profile_text) throw new Error('System prompt not found in Supabase for chat ' + chatId);
+  if (error || !data?.profile_text) {
+    if (error) metrics.supabase.errors_total++;
+    throw new Error('System prompt not found in Supabase for chat ' + chatId);
+  }
   const prompt = FORMATTING_RULES + '\n\n' + data.profile_text;
   systemPromptCache.set(chatId, prompt);
   console.log('[prompt] loaded from Supabase, length:', prompt.length);
@@ -52,11 +88,15 @@ async function getSystemPrompt(chatId) {
 // --- Rate limiter ---
 const rateLimitMap = new Map();
 
-function checkRateLimit(userId) {
+function checkRateLimit(userId, command = 'unknown') {
   const today = new Date().toISOString().slice(0, 10);
   let entry = rateLimitMap.get(userId) ?? { count: 0, date: today };
   if (entry.date !== today) entry = { count: 0, date: today };
-  if (entry.count >= 20) return false;
+  if (entry.count >= 20) {
+    metrics.ratelimit.hits_total++;
+    console.log(`[ratelimit] hit user_id=${userId} command=${command}`);
+    return false;
+  }
   entry.count++;
   rateLimitMap.set(userId, entry);
   return true;
@@ -80,11 +120,13 @@ app.get('/webhook/strava/:secret', (req, res) => {
   return res.status(403).json({ error: 'Verification failed' });
 });
 
-// POST /webhook/strava/:secret — Strava native webhook or Composio trigger
+// POST /webhook/strava/:secret — Strava native webhook
 app.post('/webhook/strava/:secret', async (req, res) => {
   if (req.params.secret !== process.env.COMPOSIO_WEBHOOK_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+
+  metrics.strava.webhook_events++;
 
   try {
     const body = req.body;
@@ -130,7 +172,11 @@ app.post('/webhook/strava/:secret', async (req, res) => {
       { onConflict: 'strava_id' }
     );
 
-    if (error) throw error;
+    if (error) {
+      metrics.supabase.errors_total++;
+      alertAdmin(`[TrailCoach] strava webhook upsert error: ${error.message}`);
+      throw error;
+    }
     return res.json({ ok: true });
   } catch (err) {
     console.error('[strava] upsert failed:', err.message);
@@ -144,6 +190,8 @@ app.post('/webhook/telegram', async (req, res) => {
   if (token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+
+  metrics.telegram.messages_total++;
 
   // Respond 200 immediately — Telegram retries on any non-2xx or timeout
   res.json({ ok: true });
@@ -163,6 +211,7 @@ app.post('/webhook/telegram', async (req, res) => {
 
     let reply;
     if (userText.startsWith('/start')) {
+      metrics.telegram.messages_by_command.start++;
       reply = `<b>Hey! I'm your personal trail-running coach 🏔</b>
 
 I analyse your Strava workouts and give concrete training recommendations.
@@ -179,6 +228,7 @@ I analyse your Strava workouts and give concrete training recommendations.
 - /plan — training plan for the week
 - Any question — just type it`;
     } else if (userText.startsWith('/connect')) {
+      metrics.telegram.messages_by_command.connect++;
       if (user.strava_athlete_id) {
         reply = '✅ Strava is already connected. Use /sync30d to refresh your data.';
       } else {
@@ -191,6 +241,7 @@ I analyse your Strava workouts and give concrete training recommendations.
         reply = `To connect Strava, open this link:\n${oauthUrl}\n\nAfter authorising, the bot will automatically have access to your activities.`;
       }
     } else if (userText.startsWith('/sync30d')) {
+      metrics.telegram.messages_by_command.sync30d++;
       if (!user.strava_athlete_id) {
         reply = 'Connect Strava first: /connect';
       } else {
@@ -203,25 +254,62 @@ I analyse your Strava workouts and give concrete training recommendations.
         }
       }
     } else if (userText.startsWith('/feedback')) {
+      metrics.telegram.messages_by_command.feedback++;
       reply = await getFeedbackResponse(user.id, chatId);
     } else if (userText.startsWith('/plan')) {
+      metrics.telegram.messages_by_command.plan++;
       reply = await getPlanResponse(user.id, chatId);
     } else {
+      metrics.telegram.messages_by_command.freetext++;
       reply = await getCoachingResponse(userText, user.id, chatId);
     }
 
     await sendTelegramMessage(chatId, reply);
   } catch (err) {
     console.error('[telegram] handler error:', err.message);
-    const errMsg = err?.status === 529 || err?.message?.includes('overloaded')
+    const isOverload = err?.status === 529 || err?.message?.includes('overloaded');
+    const errMsg = isOverload
       ? 'Claude API is overloaded, try again in a minute.'
       : 'Something went wrong. Please try again.';
+    if (!isOverload) alertAdmin(`[TrailCoach] handler error chat=${chatId}: ${err.message}`);
     sendTelegramMessage(chatId, errMsg).catch(() => {});
   }
 });
 
 // GET /health
-app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString(), v: 'direct-strava' }));
+app.get('/health', (_req, res) => {
+  const lat = metrics.claude.latency_last10;
+  res.json({
+    ok: true,
+    ts: new Date().toISOString(),
+    v: 'direct-strava',
+    uptime_s: Math.floor(process.uptime()),
+    memory_mb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    metrics: {
+      telegram: {
+        messages_total: metrics.telegram.messages_total,
+        messages_by_command: metrics.telegram.messages_by_command,
+        send_failures: metrics.telegram.send_failures,
+      },
+      claude: {
+        calls_total: metrics.claude.calls_total,
+        errors_total: metrics.claude.errors_total,
+        tokens_input: metrics.claude.tokens_input,
+        tokens_output: metrics.claude.tokens_output,
+        latency_p50_ms: calcPercentile(lat, 50),
+        latency_p90_ms: calcPercentile(lat, 90),
+      },
+      strava: {
+        syncs_total: metrics.strava.syncs_total,
+        sync_errors: metrics.strava.sync_errors,
+        webhook_events: metrics.strava.webhook_events,
+        token_refreshes: metrics.strava.token_refreshes,
+      },
+      supabase: { errors_total: metrics.supabase.errors_total },
+      ratelimit: { hits_total: metrics.ratelimit.hits_total },
+    },
+  });
+});
 
 // GET /setup/strava-webhook — one-time registration of Strava push subscription
 app.get('/setup/strava-webhook', async (req, res) => {
@@ -281,13 +369,19 @@ app.get('/setup/strava-callback', async (req, res) => {
       refresh_token: data.refresh_token,
       expires_at: data.expires_at,
     });
-    if (tokenError) throw tokenError;
+    if (tokenError) {
+      metrics.supabase.errors_total++;
+      throw tokenError;
+    }
 
     const { error: userError } = await supabase
       .from('users')
       .update({ strava_athlete_id: data.athlete.id })
       .eq('id', user.id);
-    if (userError) throw userError;
+    if (userError) {
+      metrics.supabase.errors_total++;
+      throw userError;
+    }
 
     systemPromptCache.delete(chatId);
 
@@ -318,7 +412,10 @@ async function findOrCreateUser(chatId) {
     .insert({ telegram_chat_id: chatId, is_active: true })
     .select()
     .single();
-  if (insertError) throw insertError;
+  if (insertError) {
+    metrics.supabase.errors_total++;
+    throw insertError;
+  }
   return created;
 }
 
@@ -332,10 +429,14 @@ async function getStravaToken(userId) {
     .select('*')
     .eq('user_id', userId)
     .single();
-  if (error || !data) throw new Error('Strava not connected. Use /connect');
+  if (error || !data) {
+    if (error) metrics.supabase.errors_total++;
+    throw new Error('Strava not connected. Use /connect');
+  }
 
   // Refresh if token expires within 5 minutes
   if (Date.now() / 1000 > data.expires_at - 300) {
+    metrics.strava.token_refreshes++;
     const r = await fetch('https://www.strava.com/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -361,6 +462,8 @@ async function getStravaToken(userId) {
 }
 
 async function syncStravaActivities(userId) {
+  metrics.strava.syncs_total++;
+  const t0 = Date.now();
   try {
     const token = await getStravaToken(userId);
     const since = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
@@ -393,9 +496,13 @@ async function syncStravaActivities(userId) {
     );
 
     await Promise.all(upserts);
-    console.log(`[strava] synced ${detailed.length} activities (detailed)`);
+    const latency = Date.now() - t0;
+    metrics.strava.sync_latency_ms_last = latency;
+    console.log(`[strava] sync user_id=${userId} count=${detailed.length} latency_ms=${latency}`);
     return detailed.length;
   } catch (err) {
+    metrics.strava.sync_errors++;
+    alertAdmin(`[TrailCoach] strava sync error: ${err.message}`);
     console.error('[strava] sync error:', err.message);
     throw err;
   }
@@ -439,23 +546,41 @@ async function getCoachingResponse(userText, userId, chatId) {
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
-  if (error) throw error;
+  if (error) {
+    metrics.supabase.errors_total++;
+    throw error;
+  }
 
   const summary = formatActivities(activities ?? []);
-  if (!checkRateLimit(userId)) return 'Daily limit reached (20 requests). Try again tomorrow.';
+  if (!checkRateLimit(userId, 'freetext')) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 500,
-    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-    messages: [
-      {
-        role: 'user',
-        content: `Recent activities (30 days):\n${summary}\n\nAthlete question: ${userText}`,
-      },
-    ],
-  });
+  metrics.claude.calls_total++;
+  const t0 = Date.now();
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 500,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+      messages: [
+        {
+          role: 'user',
+          content: `Recent activities (30 days):\n${summary}\n\nAthlete question: ${userText}`,
+        },
+      ],
+    });
+  } catch (err) {
+    metrics.claude.errors_total++;
+    throw err;
+  }
+  const latency = Date.now() - t0;
+  metrics.claude.latency_ms_last = latency;
+  if (metrics.claude.latency_last10.length >= 10) metrics.claude.latency_last10.shift();
+  metrics.claude.latency_last10.push(latency);
+  metrics.claude.tokens_input += response.usage.input_tokens;
+  metrics.claude.tokens_output += response.usage.output_tokens;
+  console.log(`[claude] call command=freetext latency_ms=${latency} tokens_in=${response.usage.input_tokens} tokens_out=${response.usage.output_tokens}`);
 
   return response.content[0].text;
 }
@@ -549,23 +674,41 @@ async function getFeedbackResponse(userId, chatId) {
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
-  if (error) throw error;
+  if (error) {
+    metrics.supabase.errors_total++;
+    throw error;
+  }
 
   const summary = formatActivities(activities ?? []);
-  if (!checkRateLimit(userId)) return 'Daily limit reached (20 requests). Try again tomorrow.';
+  if (!checkRateLimit(userId, 'feedback')) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 800,
-    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-    messages: [
-      {
-        role: 'user',
-        content: `Activities over the last 7 days:\n${summary}\n\nProvide structured weekly feedback. No filler phrases or repetition — keep each section concise.\n1. Week summary (volume, D+, activity types)\n2. What went well\n3. What to pay attention to\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
-      },
-    ],
-  });
+  metrics.claude.calls_total++;
+  const t0 = Date.now();
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 800,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+      messages: [
+        {
+          role: 'user',
+          content: `Activities over the last 7 days:\n${summary}\n\nProvide structured weekly feedback. No filler phrases or repetition — keep each section concise.\n1. Week summary (volume, D+, activity types)\n2. What went well\n3. What to pay attention to\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
+        },
+      ],
+    });
+  } catch (err) {
+    metrics.claude.errors_total++;
+    throw err;
+  }
+  const latency = Date.now() - t0;
+  metrics.claude.latency_ms_last = latency;
+  if (metrics.claude.latency_last10.length >= 10) metrics.claude.latency_last10.shift();
+  metrics.claude.latency_last10.push(latency);
+  metrics.claude.tokens_input += response.usage.input_tokens;
+  metrics.claude.tokens_output += response.usage.output_tokens;
+  console.log(`[claude] call command=feedback latency_ms=${latency} tokens_in=${response.usage.input_tokens} tokens_out=${response.usage.output_tokens}`);
 
   return response.content[0].text;
 }
@@ -581,7 +724,10 @@ async function getPlanResponse(userId, chatId) {
     .gte('started_at', since.toISOString())
     .order('started_at', { ascending: false });
 
-  if (error) throw error;
+  if (error) {
+    metrics.supabase.errors_total++;
+    throw error;
+  }
 
   const summary = formatActivities(activities ?? []);
 
@@ -600,20 +746,35 @@ async function getPlanResponse(userId, chatId) {
     return `${abbr} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
   }).join(', ');
 
-  if (!checkRateLimit(userId)) return 'Daily limit reached (20 requests). Try again tomorrow.';
+  if (!checkRateLimit(userId, 'plan')) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1000,
-    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-    messages: [
-      {
-        role: 'user',
-        content: `Activities over the last 30 days:\n${summary}\n\nDates for ${isCurrentWeek ? 'this' : 'next'} week: ${weekDatesStr}\n\nCreate a training plan for this week. For each day use a heading in the format <b>Weekday, DD Mon</b> — then type, duration/distance, HR zones, key focus. No intro phrases. Account for the current phase (May 2026 — recovery after MIUT) and the 30-day load.\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
-      },
-    ],
-  });
+  metrics.claude.calls_total++;
+  const t0 = Date.now();
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1000,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+      messages: [
+        {
+          role: 'user',
+          content: `Activities over the last 30 days:\n${summary}\n\nDates for ${isCurrentWeek ? 'this' : 'next'} week: ${weekDatesStr}\n\nCreate a training plan for this week. For each day use a heading in the format <b>Weekday, DD Mon</b> — then type, duration/distance, HR zones, key focus. No intro phrases. Account for the current phase (May 2026 — recovery after MIUT) and the 30-day load.\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
+        },
+      ],
+    });
+  } catch (err) {
+    metrics.claude.errors_total++;
+    throw err;
+  }
+  const latency = Date.now() - t0;
+  metrics.claude.latency_ms_last = latency;
+  if (metrics.claude.latency_last10.length >= 10) metrics.claude.latency_last10.shift();
+  metrics.claude.latency_last10.push(latency);
+  metrics.claude.tokens_input += response.usage.input_tokens;
+  metrics.claude.tokens_output += response.usage.output_tokens;
+  console.log(`[claude] call command=plan latency_ms=${latency} tokens_in=${response.usage.input_tokens} tokens_out=${response.usage.output_tokens}`);
 
   return response.content[0].text;
 }
@@ -675,11 +836,16 @@ async function sendTelegramMessage(chatId, text) {
     body: JSON.stringify({ chat_id: chatId, text: sanitizeHtml(text), parse_mode: 'HTML' }),
   });
   if (!r.ok) {
+    metrics.telegram.send_failures++;
     const errBody = await r.text();
     const sanitized = sanitizeHtml(text);
     console.error('[telegram] sendMessage failed:', errBody);
     console.error('[telegram] sanitized text (first 800 chars):', sanitized.slice(0, 800));
   }
+}
+
+function alertAdmin(message) {
+  sendTelegramMessage(ADMIN_CHAT_ID, message).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
