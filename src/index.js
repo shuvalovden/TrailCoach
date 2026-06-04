@@ -55,6 +55,7 @@ app.listen(PORT, () => {
   registerTelegramCommands().catch((err) =>
     console.error('[telegram] registerTelegramCommands error:', err.message)
   );
+  setTimeout(flushMetrics, 10 * 1000);            // initial flush 10s after startup
   setInterval(flushMetrics, 3 * 60 * 60 * 1000); // every 3 hours
 
   process.on('SIGTERM', async () => {

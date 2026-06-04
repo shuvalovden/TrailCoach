@@ -34,6 +34,7 @@ az containerapp update `
     --name $APP `
     --resource-group $RG `
     --image $IMAGE `
+    --min-replicas 1 `
     --set-env-vars @envVars
 if ($LASTEXITCODE -ne 0) { Write-Host "containerapp update failed" -ForegroundColor Red; exit 1 }
 
