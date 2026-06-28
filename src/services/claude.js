@@ -25,11 +25,10 @@ async function getSystemPrompt(chatId) {
     .select('profile_text')
     .eq('telegram_chat_id', chatId)
     .single();
-  if (error || !data?.profile_text) {
-    if (error) metrics.supabase.errors_total++;
-    throw new Error('System prompt not found in Supabase for chat ' + chatId);
-  }
-  const prompt = FORMATTING_RULES + '\n\n' + data.profile_text;
+  if (error) metrics.supabase.errors_total++;
+  const profileText = data?.profile_text?.trim() ||
+    'No athlete profile set. Ask the user to run /profile to share their background and goals.';
+  const prompt = FORMATTING_RULES + '\n\n' + profileText;
   systemPromptCache.set(chatId, prompt);
   console.log('[prompt] loaded from Supabase, length:', prompt.length);
   return prompt;

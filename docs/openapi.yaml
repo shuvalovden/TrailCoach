@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Sisu Coach API
+  title: Trail Coach API
   description: >
     Personal AI trail-running coach for Denis Shuvalov.
     Receives Telegram messages, syncs Strava activities, generates coaching advice via Claude.
@@ -37,7 +37,6 @@ components:
   # Reusable schemas
   # ---------------------------------------------------------------------------
   schemas:
-
     HealthResponse:
       type: object
       required: [ok, ts, v]
@@ -109,9 +108,9 @@ components:
         message_id:
           type: integer
         from:
-          $ref: '#/components/schemas/TelegramUser'
+          $ref: "#/components/schemas/TelegramUser"
         chat:
-          $ref: '#/components/schemas/TelegramChat'
+          $ref: "#/components/schemas/TelegramChat"
         date:
           type: integer
           description: Unix timestamp when the message was sent.
@@ -128,7 +127,7 @@ components:
           type: integer
           description: Unique update identifier.
         message:
-          $ref: '#/components/schemas/TelegramMessage'
+          $ref: "#/components/schemas/TelegramMessage"
 
     # --- Strava webhook ---
 
@@ -137,7 +136,15 @@ components:
       description: >
         Native Strava push subscription event format.
         Only `create` events for `activity` are processed; all others are accepted but ignored.
-      required: [object_type, aspect_type, object_id, owner_id, subscription_id, event_time]
+      required:
+        [
+          object_type,
+          aspect_type,
+          object_id,
+          owner_id,
+          subscription_id,
+          event_time,
+        ]
       properties:
         object_type:
           type: string
@@ -260,7 +267,6 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
-
   /health:
     get:
       summary: Health check
@@ -273,7 +279,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
+                $ref: "#/components/schemas/HealthResponse"
 
   # --- Telegram webhook ---
 
@@ -296,7 +302,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TelegramUpdate'
+              $ref: "#/components/schemas/TelegramUpdate"
             example:
               update_id: 100500
               message:
@@ -322,13 +328,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OkResponse'
+                $ref: "#/components/schemas/OkResponse"
         "401":
           description: Missing or invalid `X-Telegram-Bot-Api-Secret-Token` header.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
   # --- Strava webhook ---
 
@@ -384,13 +390,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
         "403":
           description: hub.mode or hub.verify_token mismatch.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
     post:
       summary: Strava activity push event
@@ -412,8 +418,8 @@ paths:
           application/json:
             schema:
               oneOf:
-                - $ref: '#/components/schemas/StravaWebhookEventNative'
-                - $ref: '#/components/schemas/StravaActivity'
+                - $ref: "#/components/schemas/StravaWebhookEventNative"
+                - $ref: "#/components/schemas/StravaActivity"
             examples:
               native:
                 summary: Native Strava event
@@ -442,25 +448,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StravaWebhookUpsertResponse'
+                $ref: "#/components/schemas/StravaWebhookUpsertResponse"
         "400":
           description: Activity ID could not be determined from the request body.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: Invalid secret path segment.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Supabase upsert failed.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
   # --- Setup endpoints (one-time, admin) ---
 
@@ -486,13 +492,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StravaWebhookSetupResponse'
+                $ref: "#/components/schemas/StravaWebhookSetupResponse"
         "401":
           description: Invalid token query parameter.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
   /setup/strava-oauth:
     get:
@@ -523,7 +529,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
   /setup/strava-callback:
     get:
@@ -558,19 +564,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StravaCallbackResponse'
+                $ref: "#/components/schemas/StravaCallbackResponse"
         "400":
           description: No `code` query parameter present.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Token exchange failed or Supabase write error.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
 # ---------------------------------------------------------------------------
 # Tags

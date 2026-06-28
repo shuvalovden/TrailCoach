@@ -2,7 +2,8 @@
 const { Router } = require('express');
 const { findOrCreateUser } = require('../lib/users');
 const { sendTelegramMessage, alertAdmin } = require('../lib/telegram');
-const { getCoachingResponse, getFeedbackResponse, getPlanResponse } = require('../services/claude');
+const { getCoachingResponse, getFeedbackResponse, getPlanResponse, clearSystemPromptCache } = require('../services/claude');
+const { supabase } = require('../lib/clients');
 const { syncStravaActivities } = require('../services/strava');
 const { metrics } = require('../lib/metrics');
 const { STRAVA_CLIENT_ID } = require('../lib/clients');
@@ -41,11 +42,13 @@ router.post('/webhook/telegram', async (req, res) => {
 I analyse your Strava workouts and give concrete training recommendations.
 
 <b>Getting started:</b>
-1. Connect Strava: /connect
-2. Load workouts: /sync30d
-3. Done — ask me anything!
+1. Tell me about yourself: /profile
+2. Connect Strava: /connect
+3. Load workouts: /sync30d
+4. Done — ask me anything!
 
 <b>Commands:</b>
+- /profile — set your athlete profile and goals
 - /connect — connect your Strava account
 - /sync30d — sync data from Strava (last 30 days)
 - /feedback — analysis of the last 7 days
@@ -75,6 +78,28 @@ I analyse your Strava workouts and give concrete training recommendations.
           reply = `Done — synced ${count} activities for the last 30 days.`;
         } catch (err) {
           reply = `Sync error: ${err.message}`;
+        }
+      }
+    } else if (userText.startsWith('/profile')) {
+      metrics.telegram.messages_by_command.profile = (metrics.telegram.messages_by_command.profile || 0) + 1;
+      const profileText = userText.replace('/profile', '').trim();
+      if (!profileText) {
+        reply = `Tell me about yourself so I can give better advice.
+
+<b>Example:</b>
+<code>/profile I'm 34, running 3x/week ~40 km. HR zones: Z2 &lt;148, Z3 148–162, Z4 162–172. Goal: first 50 km trail race in October. I struggle with long climbs and need to build aerobic base.</code>
+
+Include: age, weekly volume, heart rate zones if known, current goals, any weaknesses or injuries.`;
+      } else {
+        const { error } = await supabase
+          .from('users')
+          .update({ profile_text: profileText })
+          .eq('telegram_chat_id', chatId);
+        if (error) {
+          reply = 'Failed to save profile. Please try again.';
+        } else {
+          clearSystemPromptCache(chatId);
+          reply = '✅ Profile saved! I\'ll use this to personalise your coaching.';
         }
       }
     } else if (userText.startsWith('/feedback')) {
