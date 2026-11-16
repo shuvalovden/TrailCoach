@@ -7,8 +7,25 @@ const { supabase } = require('../lib/clients');
 const { syncStravaActivities } = require('../services/strava');
 const { metrics } = require('../lib/metrics');
 const { STRAVA_CLIENT_ID } = require('../lib/clients');
+const { t } = require('../lib/i18n');
 
 const router = Router();
+
+const LANGUAGE_KEYBOARD = {
+  inline_keyboard: [[
+    { text: 'EN English', callback_data: 'lang:en' },
+    { text: '🇷🇺 Русский', callback_data: 'lang:ru' },
+    { text: '🇮🇹 Italiano', callback_data: 'lang:it' },
+  ]],
+};
+
+async function answerCallbackQuery(callbackQueryId) {
+  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackQueryId }),
+  });
+}
 
 router.post('/webhook/telegram', async (req, res) => {
   const token = req.headers['x-telegram-bot-api-secret-token'];
@@ -17,9 +34,19 @@ router.post('/webhook/telegram', async (req, res) => {
   }
 
   metrics.telegram.messages_total++;
-
-  // Respond 200 immediately — Telegram retries on any non-2xx or timeout
   res.json({ ok: true });
+
+  // Handle language selection callback
+  const callbackQuery = req.body?.callback_query;
+  if (callbackQuery?.data?.startsWith('lang:')) {
+    const lang = callbackQuery.data.split(':')[1];
+    const chatId = callbackQuery.message.chat.id;
+    await answerCallbackQuery(callbackQuery.id);
+    if (!['en', 'ru', 'it'].includes(lang)) return;
+    await supabase.from('users').update({ language: lang }).eq('telegram_chat_id', chatId);
+    await sendTelegramMessage(chatId, t(lang, 'language_set') + '\n\n' + t(lang, 'start'));
+    return;
+  }
 
   const message = req.body?.message;
   if (!message?.text) return;
@@ -30,34 +57,22 @@ router.post('/webhook/telegram', async (req, res) => {
 
     const user = await findOrCreateUser(chatId);
     if (!user.is_active) {
-      await sendTelegramMessage(chatId, 'Access restricted.');
+      await sendTelegramMessage(chatId, t(user.language, 'access_restricted'));
       return;
     }
 
+    const lang = user.language ?? 'en';
     let reply;
+    let replyMarkup;
+
     if (userText.startsWith('/start')) {
       metrics.telegram.messages_by_command.start++;
-      reply = `<b>Hey! I'm your personal trail-running coach 🏔</b>
-
-I analyse your Strava workouts and give concrete training recommendations.
-
-<b>Getting started:</b>
-1. Tell me about yourself: /profile
-2. Connect Strava: /connect
-3. Load workouts: /sync30d
-4. Done — ask me anything!
-
-<b>Commands:</b>
-- /profile — set your athlete profile and goals
-- /connect — connect your Strava account
-- /sync30d — sync data from Strava (last 30 days)
-- /feedback — analysis of the last 7 days
-- /plan — training plan for the week
-- Any question — just type it`;
+      reply = t(lang, 'choose_language');
+      replyMarkup = LANGUAGE_KEYBOARD;
     } else if (userText.startsWith('/connect')) {
       metrics.telegram.messages_by_command.connect++;
       if (user.strava_athlete_id) {
-        reply = '✅ Strava is already connected. Use /sync30d to refresh your data.';
+        reply = t(lang, 'strava_already_connected');
       } else {
         const redirectUri = `${process.env.APP_BASE_URL}/setup/strava-callback`;
         const oauthUrl = `https://www.strava.com/oauth/authorize` +
@@ -65,63 +80,56 @@ I analyse your Strava workouts and give concrete training recommendations.
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
           `&response_type=code&scope=activity%3Aread_all` +
           `&approval_prompt=force&state=${chatId}`;
-        reply = `To connect Strava, open this link:\n${oauthUrl}\n\nAfter authorising, the bot will automatically have access to your activities.`;
+        reply = t(lang, 'strava_connect_link', oauthUrl);
       }
     } else if (userText.startsWith('/sync30d')) {
       metrics.telegram.messages_by_command.sync30d++;
       if (!user.strava_athlete_id) {
-        reply = 'Connect Strava first: /connect';
+        reply = t(lang, 'strava_connect_first');
       } else {
-        await sendTelegramMessage(chatId, 'Syncing activities from Strava...');
+        await sendTelegramMessage(chatId, t(lang, 'syncing'));
         try {
           const count = await syncStravaActivities(user.id);
-          reply = `Done — synced ${count} activities for the last 30 days.`;
+          reply = t(lang, 'sync_done', count);
         } catch (err) {
-          reply = `Sync error: ${err.message}`;
+          reply = t(lang, 'sync_error', err.message);
         }
       }
     } else if (userText.startsWith('/profile')) {
       metrics.telegram.messages_by_command.profile = (metrics.telegram.messages_by_command.profile || 0) + 1;
       const profileText = userText.replace('/profile', '').trim();
       if (!profileText) {
-        reply = `Tell me about yourself so I can give better advice.
-
-<b>Example:</b>
-<code>/profile I'm 34, running 3x/week ~40 km. HR zones: Z2 &lt;148, Z3 148–162, Z4 162–172. Goal: first 50 km trail race in October. I struggle with long climbs and need to build aerobic base.</code>
-
-Include: age, weekly volume, heart rate zones if known, current goals, any weaknesses or injuries.`;
+        reply = t(lang, 'profile_prompt');
       } else {
         const { error } = await supabase
           .from('users')
           .update({ profile_text: profileText })
           .eq('telegram_chat_id', chatId);
         if (error) {
-          reply = 'Failed to save profile. Please try again.';
+          reply = t(lang, 'profile_error');
         } else {
           clearSystemPromptCache(chatId);
-          reply = '✅ Profile saved! I\'ll use this to personalise your coaching.';
+          reply = t(lang, 'profile_saved');
         }
       }
     } else if (userText.startsWith('/feedback')) {
       metrics.telegram.messages_by_command.feedback++;
-      reply = await getFeedbackResponse(user.id, chatId);
+      reply = await getFeedbackResponse(user.id, chatId, lang);
     } else if (userText.startsWith('/plan')) {
       metrics.telegram.messages_by_command.plan++;
-      reply = await getPlanResponse(user.id, chatId);
+      reply = await getPlanResponse(user.id, chatId, lang);
     } else {
       metrics.telegram.messages_by_command.freetext++;
-      reply = await getCoachingResponse(userText, user.id, chatId);
+      reply = await getCoachingResponse(userText, user.id, chatId, lang);
     }
 
-    await sendTelegramMessage(chatId, reply);
+    await sendTelegramMessage(chatId, reply, replyMarkup);
   } catch (err) {
     console.error('[telegram] handler error:', err.message);
     const isOverload = err?.status === 529 || err?.message?.includes('overloaded');
-    const errMsg = isOverload
-      ? 'Claude API is overloaded, try again in a minute.'
-      : 'Something went wrong. Please try again.';
+    const errMsg = isOverload ? 'Claude API is overloaded, try again in a minute.' : 'Something went wrong. Please try again.';
     if (!isOverload) alertAdmin(`[TrailCoach] handler error chat=${chatId}: ${err.message}`);
-    sendTelegramMessage(chatId, errMsg).catch(() => {});
+    sendTelegramMessage(chatId, errMsg).catch(() => { });
   }
 });
 

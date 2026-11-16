@@ -4,12 +4,14 @@ const { metrics } = require('./metrics');
 
 const ADMIN_CHAT_ID = 546691918;
 
-async function sendTelegramMessage(chatId, text) {
+async function sendTelegramMessage(chatId, text, replyMarkup) {
   const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const body = { chat_id: chatId, text: sanitizeHtml(text), parse_mode: 'HTML' };
+  if (replyMarkup) body.reply_markup = replyMarkup;
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: sanitizeHtml(text), parse_mode: 'HTML' }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     metrics.telegram.send_failures++;

@@ -38,11 +38,18 @@ az containerapp update `
     --set-env-vars @envVars
 if ($LASTEXITCODE -ne 0) { Write-Host "containerapp update failed" -ForegroundColor Red; exit 1 }
 
-# --- 3. Health check ---
+# --- 3. Restart container to pick up new image ---
+Write-Host ""
+Write-Host "=== Restarting container ===" -ForegroundColor Cyan
+$revision = az containerapp revision list --name $APP --resource-group $RG --query "[0].name" -o tsv
+az containerapp revision restart --name $APP --resource-group $RG --revision $revision
+if ($LASTEXITCODE -ne 0) { Write-Host "Restart failed" -ForegroundColor Red; exit 1 }
+
+# --- 4. Health check ---
 Write-Host ""
 Write-Host "=== Health check ===" -ForegroundColor Cyan
 $fqdn = az containerapp show --name $APP --resource-group $RG --query "properties.configuration.ingress.fqdn" -o tsv
 $url = "https://$fqdn"
 Write-Host "URL: $url"
-Start-Sleep -Seconds 5
+Start-Sleep -Seconds 10
 curl.exe "$url/health"

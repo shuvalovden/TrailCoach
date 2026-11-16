@@ -35,7 +35,7 @@ router.post('/webhook/strava/:secret', async (req, res) => {
     let strava_id;
     let webhookUserId = null;
 
-    if (body?.object_type === 'activity' && body?.aspect_type === 'create') {
+    if (body?.object_type === 'activity') {
       // Strava native format — route to the correct user by owner_id
       strava_id = Number(body.object_id);
       const ownerId = Number(body.owner_id);
@@ -49,10 +49,23 @@ router.post('/webhook/strava/:secret', async (req, res) => {
         return res.json({ ok: true });
       }
       webhookUserId = webhookUser.id;
+
+      if (body.aspect_type === 'delete') {
+        await supabase.from('activities').delete().eq('strava_id', strava_id);
+        console.log(`[strava] webhook: deleted activity strava_id=${strava_id}`);
+        return res.json({ ok: true });
+      }
+
+      // create or update — fetch full activity data from Strava API
       activityData = await fetchStravaActivity(strava_id, webhookUserId);
+      if (!activityData) {
+        console.warn(`[strava] webhook: fetchStravaActivity returned null for strava_id=${strava_id}, skipping upsert`);
+        return res.json({ ok: true });
+      }
     } else {
-      activityData = body?.data ?? body?.triggerData ?? body?.payload ?? body;
-      strava_id = Number(activityData?.id ?? activityData?.object_id);
+      // athlete events and other non-activity types — ignore
+      console.log(`[strava] webhook: ignoring event object_type=${body?.object_type}`);
+      return res.json({ ok: true });
     }
 
     if (!strava_id) {

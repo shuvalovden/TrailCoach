@@ -9,6 +9,10 @@ async function findOrCreateUser(chatId) {
     .eq('telegram_chat_id', chatId)
     .single();
   if (!error && data) return data;
+  if (error && error.code !== 'PGRST116') {
+    metrics.supabase.errors_total++;
+    throw error;
+  }
   const { data: created, error: insertError } = await supabase
     .from('users')
     .insert({ telegram_chat_id: chatId, is_active: true })

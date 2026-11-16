@@ -2,6 +2,7 @@
 const { anthropic, supabase } = require('../lib/clients');
 const { metrics } = require('../lib/metrics');
 const { checkRateLimit } = require('../lib/rateLimit');
+const { t } = require('../lib/i18n');
 
 // Formatting rules are static (apply to all users). Athlete profile is fetched from
 // Supabase users.profile_text and combined with these rules at runtime.
@@ -116,7 +117,9 @@ function formatActivities(activities) {
     .join('\n');
 }
 
-async function getCoachingResponse(userText, userId, chatId) {
+async function getCoachingResponse(userText, userId, chatId, lang = 'en') {
+  if (!checkRateLimit(userId, 'freetext')) return t(lang, 'rate_limit');
+
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
@@ -133,7 +136,6 @@ async function getCoachingResponse(userText, userId, chatId) {
   }
 
   const summary = formatActivities(activities ?? []);
-  if (!checkRateLimit(userId, 'freetext')) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   metrics.claude.calls_total++;
@@ -147,7 +149,7 @@ async function getCoachingResponse(userText, userId, chatId) {
       messages: [
         {
           role: 'user',
-          content: `Recent activities (30 days):\n${summary}\n\nAthlete question: ${userText}`,
+          content: `${t(lang, 'claude_language')}\nRecent activities (30 days):\n${summary}\n\nAthlete question: ${userText}`,
         },
       ],
     });
@@ -166,7 +168,9 @@ async function getCoachingResponse(userText, userId, chatId) {
   return response.content[0].text;
 }
 
-async function getFeedbackResponse(userId, chatId) {
+async function getFeedbackResponse(userId, chatId, lang = 'en') {
+  if (!checkRateLimit(userId, 'feedback')) return t(lang, 'rate_limit');
+
   const since = new Date();
   since.setDate(since.getDate() - 7);
 
@@ -183,7 +187,6 @@ async function getFeedbackResponse(userId, chatId) {
   }
 
   const summary = formatActivities(activities ?? []);
-  if (!checkRateLimit(userId, 'feedback')) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   metrics.claude.calls_total++;
@@ -197,7 +200,7 @@ async function getFeedbackResponse(userId, chatId) {
       messages: [
         {
           role: 'user',
-          content: `Activities over the last 7 days:\n${summary}\n\nProvide structured weekly feedback. No filler phrases or repetition — keep each section concise.\n1. Week summary (volume, D+, activity types)\n2. What went well\n3. What to pay attention to\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
+          content: `${t(lang, 'claude_language')}\nActivities over the last 7 days:\n${summary}\n\nProvide structured weekly feedback. No filler phrases or repetition — keep each section concise.\n1. Week summary (volume, D+, activity types)\n2. What went well\n3. What to pay attention to\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
         },
       ],
     });
@@ -216,7 +219,9 @@ async function getFeedbackResponse(userId, chatId) {
   return response.content[0].text;
 }
 
-async function getPlanResponse(userId, chatId) {
+async function getPlanResponse(userId, chatId, lang = 'en') {
+  if (!checkRateLimit(userId, 'plan')) return t(lang, 'rate_limit');
+
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
@@ -248,8 +253,6 @@ async function getPlanResponse(userId, chatId) {
     d.setDate(monday.getDate() + i);
     return `${abbr} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
   }).join(', ');
-
-  if (!checkRateLimit(userId, 'plan')) return 'Daily limit reached (20 requests). Try again tomorrow.';
   const systemPrompt = await getSystemPrompt(chatId);
 
   metrics.claude.calls_total++;
@@ -258,12 +261,12 @@ async function getPlanResponse(userId, chatId) {
   try {
     response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
+      max_tokens: 1300,
       system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
       messages: [
         {
           role: 'user',
-          content: `Activities over the last 30 days:\n${summary}\n\nDates for ${isCurrentWeek ? 'this' : 'next'} week: ${weekDatesStr}\n\nCreate a training plan for this week. For each day use a heading in the format <b>Weekday, DD Mon</b> — then type, duration/distance, HR zones, key focus. No intro phrases. Account for the current phase (May 2026 — recovery after MIUT) and the 30-day load.\n\nFormatting: only <b> HTML tags for emphasis, emojis for section headings, no tables or markdown.`,
+          content: `${t(lang, 'claude_language')}\nActivities over the last 30 days:\n${summary}\n\nDates for ${isCurrentWeek ? 'this' : 'next'} week: ${weekDatesStr}\n\nCreate a training plan for this week.\n\nStructure (follow exactly):\n1. ONE header line: week number, focus, total volume km/D+, key session, any critical notes. Example: "Week 14. Focus: descents + ITB. Volume: 45km/2400m D+ (–20%). Key: descent technique Thu. Recovery week before VK."\n2. Each day as <b>Weekday DD Mon</b> — type, duration/distance, HR zone, key focus. Rest days: one short line.\n\nDo NOT write a feedback section, trend analysis, or load summary before the plan. Start directly with the header line.`,
         },
       ],
     });
